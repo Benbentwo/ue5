@@ -1,25 +1,99 @@
 package cmd
 
 import (
+	"github.com/Benbentwo/ue5/pkg"
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 	"os"
+	"path/filepath"
+	"strings"
+)
+
+var (
+	projectPathFlag  string // From --project flag
+	ResolvedUProject string // Resolved path to *.uproject file
+	UProject         *pkg.Uproject
+	ProjectName      string // Name of the project, derived from the .uproject filename
+	EnginePath       string // Path to the Unreal Engine installation
+	Debug            bool   // Debug flag to enable debug logging
+	Target           string // Target to build, e.g. "MyProjectEditor"
+	State            string // State of the build, e.g. "Development" or "Shipping"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "hugo",
-	Short: "Hugo is a very fast static site generator",
-	Long: `A Fast and Flexible Static Site Generator built with
-                love by spf13 and friends in Go.
-                Complete documentation is available at https://gohugo.io/documentation/`,
+	Use:   "ue5",
+	Short: "UE5 CLI to help build and package Unreal Engine 5 projects",
+	Long:  `UE5 CLI is a command line tool to help build and package Unreal Engine 5 projects.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		log.Info("UE5 CLI")
+		cmd.Help()
 	},
+	PersistentPreRun: PreRun,
 }
 
+// Function for main.go to call to execute the root command
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		log.Error("Error executing command", "error", err)
 		os.Exit(1)
 	}
+}
+
+func PreRun(cmd *cobra.Command, args []string) {
+	if cmd.Name() == "help" || cmd.Name() == "version" || cmd.Name() == "ue5" {
+		return
+	}
+	if Debug {
+		log.SetLevel(log.DebugLevel)
+	}
+	UpdateProjectPath()
+	UpdateEnginePath()
+	log.Info("Running", "project", ProjectName, "Engine", UProject.EngineAssociation, "EnginePath", EnginePath)
+}
+
+// UpdateProjectPath Determines the project path based on the --project flag or current directory
+// and updates the ResolvedUProject variable.
+func UpdateProjectPath() {
+	log.Debug("Checking for project directory")
+	dir := projectPathFlag
+	if dir == "" {
+		var err error
+		dir, err = os.Getwd()
+		if err != nil {
+			log.Fatal("could not get current directory", "error", err)
+		}
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		log.Fatal("invalid project directory", "dir", dir)
+	}
+
+	// Search for *.uproject
+	matches, err := filepath.Glob(filepath.Join(dir, "*.uproject"))
+	if err != nil || len(matches) == 0 {
+		log.Print("Please run from project directory or specify a project with --project <path>")
+		log.Fatal("no .uproject file found in the directory", "dir", dir)
+	}
+	ResolvedUProject = matches[0]
+	log.Debug("✅ Determined project", "uproject", ResolvedUProject)
+	FileName := filepath.Base(ResolvedUProject)
+	ProjectName = strings.TrimSuffix(FileName, filepath.Ext(FileName))
+
+	UProject = pkg.NewUproject(ResolvedUProject)
+	log.Debug("Loaded UProject", "Name", ProjectName, "EngineVersion", UProject.EngineAssociation)
+}
+
+func UpdateEnginePath() {
+	if ResolvedUProject == "" {
+		log.Error("No project path set. Please run 'ue5cli --project <path>' to set the project path.")
+		return
+	}
+
+	EnginePath = pkg.GetEnginePath(UProject.EngineAssociation)
+	log.Debug("Engine Path", "path", EnginePath)
+}
+
+func init() {
+	rootCmd.PersistentFlags().StringVarP(&projectPathFlag, "project", "p", "", "Path to the project directory (default: current directory)")
+	rootCmd.PersistentFlags().BoolVarP(&Debug, "debug", "d", false, "Enable debug logging")
 }

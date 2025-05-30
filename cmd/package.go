@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"fmt"
-
+	"github.com/Benbentwo/ue5/pkg"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
 
@@ -17,20 +17,16 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("package called")
+		err := pkg.RunPackageScript(EnginePath, pkg.GetPlatform(), State, ResolvedUProject)
+		if err != nil {
+			log.Error("Failed to run package script", "error", err)
+		}
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(packageCmd)
 
-	// Here you will define your flags and configuration settings.
+	packageCmd.PersistentFlags().StringVarP(&State, "state", "s", "Development", "State of the build, e.g. Development or Shipping")
 
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// packageCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// packageCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }

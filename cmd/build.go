@@ -4,8 +4,8 @@ Copyright © 2025 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
-	"fmt"
-
+	"github.com/Benbentwo/ue5/pkg"
+	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
 
@@ -19,21 +19,25 @@ and usage of using your command. For example:
 Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("build called")
-	},
+	Run: RunBuildCommand,
+}
+
+func RunBuildCommand(cmd *cobra.Command, args []string) {
+	///Path/To/UE5/Engine/Build/BatchFiles/Mac/Build.sh ProjectNameEditor Mac Development "/Path/To/Project/ProjectName.uproject"
+	if EnginePath == "" {
+		return
+	}
+
+	err := pkg.RunBuildScript(EnginePath, ProjectName+"Editor", pkg.GetPlatform(), "Development", ResolvedUProject)
+	if err != nil {
+		return
+	}
+	log.Info("✅  Project built successfully", "project", ProjectName, "target", Target, "state", State)
 }
 
 func init() {
 	rootCmd.AddCommand(buildCmd)
 
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// buildCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// buildCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	buildCmd.PersistentFlags().StringVarP(&Target, "target", "t", ProjectName+"Editor", "Target to build, e.g. MyProjectEditor")
+	buildCmd.PersistentFlags().StringVarP(&State, "state", "s", "Development", "State of the build, e.g. Development or Shipping")
 }
