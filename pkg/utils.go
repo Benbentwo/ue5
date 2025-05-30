@@ -10,12 +10,10 @@ import (
 )
 
 func GetPlatform() string {
-	// Get the current operating system
-	os := runtime.GOOS
 	// Convert the OS to a platform string
-	platform := OsToPlatform(os)
+	platform := OsToPlatform(runtime.GOOS)
 	if platform == "" {
-		log.Error("Unsupported operating system", "os", os)
+		log.Error("Unsupported operating system", "os", runtime.GOOS)
 		return ""
 	}
 	return platform
@@ -28,7 +26,7 @@ func OsToPlatform(os string) string {
 	case "linux":
 		return "Linux"
 	case "windows":
-		return "Windows"
+		return "Win64"
 	default:
 		return ""
 	}
@@ -66,7 +64,7 @@ func streamOutput(r io.Reader, label string) {
 			log.WithPrefix("|").Warn(line)
 		} else if strings.Contains(line, "A conflicting instance of UnrealBuildTool is already running") {
 			log.WithPrefix("|").Error(line)
-		} else if strings.Contains(strings.ToLower(line), "error:") {
+		} else if strings.Contains(strings.ToLower(line), "error") {
 			log.WithPrefix("|").Error(line)
 		} else {
 			log.WithPrefix("|").Info(line)
@@ -74,5 +72,20 @@ func streamOutput(r io.Reader, label string) {
 	}
 	if err := scanner.Err(); err != nil {
 		log.Error("Error reading output", "label", label, "error", err)
+	}
+}
+
+func OsStringSliceSwitcher(Windows []string, Mac []string, Linux []string) []string {
+	// Switch based on the current operating system
+	switch runtime.GOOS {
+	case "windows":
+		return Windows
+	case "darwin":
+		return Mac
+	case "linux":
+		return Linux // Default to Mac for Linux as well
+	default:
+		log.Error("Unsupported operating system", "os", runtime.GOOS)
+		return nil
 	}
 }

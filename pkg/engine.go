@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	MacOsManifestsPath = "~/Library/Application Support/Epic/EpicGamesLauncher/Data/Manifests/"
+	MacOsManifestsPath     = "~/Library/Application Support/Epic/EpicGamesLauncher/Data/Manifests/"
+	WindowsOsManifestsPath = "C:\\ProgramData\\Epic\\EpicGamesLauncher\\Data\\Manifests"
 )
 
 func GetEnginePath(version string) string {
@@ -31,6 +32,8 @@ func GetOSManifestsPath() string {
 	log.Debug("Determining OS manifests path", "os", runtime.GOOS)
 	if runtime.GOOS == "darwin" {
 		return MacOsManifestsPath
+	} else if runtime.GOOS == "windows" {
+		return WindowsOsManifestsPath
 	}
 	return "" // Return empty string for unsupported OS
 }

@@ -4,18 +4,39 @@ import (
 	"github.com/charmbracelet/log"
 	"os"
 	"os/exec"
-	"path"
+	"path/filepath"
 )
 
-///Path/To/UE5/Engine/Build/BatchFiles/RunUAT.sh BuildCookRun \
-//-project="/Path/To/Project/ProjectName.uproject" \
-//-noP4 -platform=Mac -clientconfig=Development -serverconfig=Development \
-//-cook -allmaps -build -stage -pak -archive \
-//-archivedirectory="/Path/To/Output"
+// /Path/To/UE5/Engine/Build/BatchFiles/RunUAT.sh BuildCookRun \
+// -project="/Path/To/Project/ProjectName.uproject" \
+// -noP4 -platform=Mac -clientconfig=Development -serverconfig=Development \
+// -cook -allmaps -build -stage -pak -archive \
+// -archivedirectory="/Path/To/Output"
+var (
+	WindowsUATScript = []string{"Engine", "Build", "BatchFiles", "RunUAT.bat"}
+	UnixUATScript    = []string{"Engine", "Build", "BatchFiles", "RunUAT.sh"}
+)
 
+//	func RunBuildScript(EnginePath, Target string, Platform string, State string, ProjectPath string) error {
+//		// Build the script to run the Unreal Engine project
+//
+//		osPath := OsStringSliceSwitcher(WindowsBuildScript, UnixBuildScript, UnixBuildScript)
+//		basePath := []string{EnginePath}
+//		pathElements := append(basePath, osPath...)
+//		buildScript := filepath.Join(pathElements...)
+//		log.Info("Running build script", "script", buildScript, "target", Target, "platform", Platform, "state", State, "projectPath", ProjectPath)
+//
+//		cmd := exec.Command(buildScript, Target, Platform, State, ProjectPath)
+//
+//		return RunCmd(cmd)
+//	}
 func RunPackageScript(EnginePath, Platform string, State string, ProjectPath string) error {
 	// Build the script to run the Unreal Engine project
-	buildScript := path.Join(EnginePath, "Engine", "Build", "BatchFiles", "RunUAT.sh")
+	osPath := OsStringSliceSwitcher(WindowsUATScript, UnixUATScript, UnixUATScript)
+	basePath := []string{EnginePath}
+	pathElements := append(basePath, osPath...)
+	buildScript := filepath.Join(pathElements...)
+
 	log.Info("Running Package script", "script", buildScript, "platform", Platform, "state", State, "projectPath", ProjectPath)
 	archivedir := makeArchiveDirectory(ProjectPath, "dist")
 
@@ -40,9 +61,9 @@ func RunPackageScript(EnginePath, Platform string, State string, ProjectPath str
 }
 
 func makeArchiveDirectory(ResolvedUProject string, archiveDir string) string {
-	ProjectDir := path.Dir(ResolvedUProject)
-	ResolvedArchiveDirPlatform := path.Join(ProjectDir, archiveDir, GetPlatform())
-	ResolvedArchiveDir := path.Join(ProjectDir, archiveDir)
+	ProjectDir := filepath.Dir(ResolvedUProject)
+	ResolvedArchiveDirPlatform := filepath.Join(ProjectDir, archiveDir, GetPlatform())
+	ResolvedArchiveDir := filepath.Join(ProjectDir, archiveDir)
 	info, err := os.Stat(ResolvedArchiveDirPlatform)
 	if os.IsNotExist(err) {
 		err := os.MkdirAll(ResolvedArchiveDirPlatform, os.ModePerm)

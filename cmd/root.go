@@ -64,17 +64,26 @@ func UpdateProjectPath() {
 	}
 
 	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
-		log.Fatal("invalid project directory", "dir", dir)
-	}
+	// TODO add `.uplugin` support
+	if strings.HasSuffix(dir, ".uproject") {
+		// If the path ends with .uproject, treat it as a project file
+		log.Debug("Project path is a .uproject file", "path", dir)
+		ResolvedUProject = dir
+	} else if err != nil || !info.IsDir() {
+		// If the path is not a directory or does not exist, log an error
+		// e.g. if someone passes myproject.txt or a non-existent directory
+		log.Fatal("invalid project directory", "dir", dir, "info", info, "error", err)
+	} else {
+		// else (if the path is a directory)
+		// Search for *.uproject
+		matches, err := filepath.Glob(filepath.Join(dir, "*.uproject"))
+		if err != nil || len(matches) == 0 {
+			log.Print("Please run from project directory or specify a project with --project <path>")
+			log.Fatal("no .uproject file found in the directory", "dir", dir)
+		}
+		ResolvedUProject = matches[0]
 
-	// Search for *.uproject
-	matches, err := filepath.Glob(filepath.Join(dir, "*.uproject"))
-	if err != nil || len(matches) == 0 {
-		log.Print("Please run from project directory or specify a project with --project <path>")
-		log.Fatal("no .uproject file found in the directory", "dir", dir)
 	}
-	ResolvedUProject = matches[0]
 	log.Debug("✅ Determined project", "uproject", ResolvedUProject)
 	FileName := filepath.Base(ResolvedUProject)
 	ProjectName = strings.TrimSuffix(FileName, filepath.Ext(FileName))
