@@ -30,12 +30,17 @@ func GetEnginePath(version string) string {
 
 func GetOSManifestsPath() string {
 	log.Debug("Determining OS manifests path", "os", runtime.GOOS)
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		return MacOsManifestsPath
-	} else if runtime.GOOS == "windows" {
+	case "windows":
 		return WindowsOsManifestsPath
+	case "linux":
+		return MacOsManifestsPath
+	default:
+		return ""
 	}
-	return "" // Return empty string for unsupported OS
+
 }
 func GetOSManifestsPathSafe() string {
 	path, err := expandPath(GetOSManifestsPath())

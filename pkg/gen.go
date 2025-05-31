@@ -40,15 +40,15 @@ func unixBasedProjectGeneration(EnginePath string) string {
 	return genScript
 }
 
-func windowsBasedProjectGeneration() {
-
-}
-
 func getOsGenScript() []string {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		return WindowsGenScript
-	} else if runtime.GOOS == "darwin" {
-		return MacGenScript // Return the script name for Mac
+	case "darwin":
+		return MacGenScript
+	case "linux":
+		return MacGenScript
+	default:
+		return []string{}
 	}
-	return nil
 }
