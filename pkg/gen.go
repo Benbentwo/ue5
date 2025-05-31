@@ -10,8 +10,6 @@ import (
 
 const GenerateProjectFilesSubcommand = `/projectfiles`
 
-// "C:\Program Files (x86)\Epic Games\Launcher\Engine\Binaries\Win64\UnrealVersionSelector.exe" /projectfiles "%1"
-// "C:\Program Files (x86)\Epic Games\Launcher\Engine\Binaries\Win64\UnrealVersionSelector.exe" /switchversion "%1"
 var (
 	WindowsGenScript = []string{"GenerateProjectFiles.bat"}
 	MacGenScript     = []string{"Engine", "Build", "BatchFiles", "Mac", "GenerateProjectFiles.sh"}

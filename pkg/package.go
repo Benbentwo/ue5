@@ -7,30 +7,12 @@ import (
 	"path/filepath"
 )
 
-// /Path/To/UE5/Engine/Build/BatchFiles/RunUAT.sh BuildCookRun \
-// -project="/Path/To/Project/ProjectName.uproject" \
-// -noP4 -platform=Mac -clientconfig=Development -serverconfig=Development \
-// -cook -allmaps -build -stage -pak -archive \
-// -archivedirectory="/Path/To/Output"
 var (
 	WindowsUATScript = []string{"Engine", "Build", "BatchFiles", "RunUAT.bat"}
 	UnixUATScript    = []string{"Engine", "Build", "BatchFiles", "RunUAT.sh"}
 )
 
-//	func RunBuildScript(EnginePath, Target string, Platform string, State string, ProjectPath string) error {
-//		// Build the script to run the Unreal Engine project
-//
-//		osPath := OsStringSliceSwitcher(WindowsBuildScript, UnixBuildScript, UnixBuildScript)
-//		basePath := []string{EnginePath}
-//		pathElements := append(basePath, osPath...)
-//		buildScript := filepath.Join(pathElements...)
-//		log.Info("Running build script", "script", buildScript, "target", Target, "platform", Platform, "state", State, "projectPath", ProjectPath)
-//
-//		cmd := exec.Command(buildScript, Target, Platform, State, ProjectPath)
-//
-//		return RunCmd(cmd)
-//	}
-func RunPackageScript(EnginePath, Platform string, State string, ProjectPath string) error {
+func RunPackageScript(EnginePath, Platform string, State string, ProjectPath string, OutDir string) error {
 	// Build the script to run the Unreal Engine project
 	osPath := OsStringSliceSwitcher(WindowsUATScript, UnixUATScript, UnixUATScript)
 	basePath := []string{EnginePath}
@@ -38,7 +20,7 @@ func RunPackageScript(EnginePath, Platform string, State string, ProjectPath str
 	buildScript := filepath.Join(pathElements...)
 
 	log.Info("Running Package script", "script", buildScript, "platform", Platform, "state", State, "projectPath", ProjectPath)
-	archivedir := makeArchiveDirectory(ProjectPath, "dist")
+	archivedir := makeArchiveDirectory(ProjectPath, OutDir)
 
 	cmd := exec.Command(buildScript,
 		"BuildCookRun",

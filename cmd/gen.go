@@ -1,6 +1,3 @@
-/*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -12,13 +9,8 @@ import (
 // genCmd represents the gen command
 var genCmd = &cobra.Command{
 	Use:   "gen",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Short: "Generate project files for your Unreal Engine Project",
+	Long:  `Equivalent to running Unreal Engine's GenerateProjectFiles command. Which is the same as right clicking on the .uproject file and selecting "Generate Visual Studio project files" or "Generate Xcode project files" depending on your platform.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		err := pkg.RunGenScript(EnginePath, ResolvedUProject)
 		if err != nil {
