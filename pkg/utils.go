@@ -2,11 +2,11 @@ package pkg
 
 import (
 	"bufio"
-	"github.com/charmbracelet/log"
 	"io"
 	"os/exec"
 	"runtime"
-	"strings"
+
+	"github.com/charmbracelet/log"
 )
 
 func GetPlatform() string {
@@ -60,14 +60,19 @@ func streamOutput(r io.Reader, label string) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if label == "stderr" {
+		parsed := ParseLine(line)
+
+		switch parsed.Level {
+		case LogLevelError:
+			log.WithPrefix("|").Error(line)
+		case LogLevelWarning:
 			log.WithPrefix("|").Warn(line)
-		} else if strings.Contains(line, "A conflicting instance of UnrealBuildTool is already running") {
-			log.WithPrefix("|").Error(line)
-		} else if strings.Contains(strings.ToLower(line), "error") {
-			log.WithPrefix("|").Error(line)
-		} else {
-			log.WithPrefix("|").Info(line)
+		default:
+			if label == "stderr" {
+				log.WithPrefix("|").Warn(line)
+			} else {
+				log.WithPrefix("|").Info(line)
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
