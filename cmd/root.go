@@ -10,6 +10,7 @@ import (
 )
 
 var (
+	Version          = "dev"
 	projectPathFlag  string // From --project flag
 	ResolvedUProject string // Resolved path to *.uproject file
 	UProject         *pkg.Uproject
@@ -24,6 +25,7 @@ var rootCmd = &cobra.Command{
 	Use:   "ue5",
 	Short: "UE5 CLI to help build and package Unreal Engine 5 projects",
 	Long:  `UE5 CLI is a command line tool to help build and package Unreal Engine 5 projects.`,
+	Version: Version,
 	Run: func(cmd *cobra.Command, args []string) {
 		err := cmd.Help()
 		if err != nil {
@@ -108,4 +110,5 @@ func UpdateEnginePath() {
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&projectPathFlag, "project", "p", "", "Path to the project directory (default: current directory)")
 	rootCmd.PersistentFlags().BoolVarP(&Debug, "debug", "d", false, "Enable debug logging")
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
 }
