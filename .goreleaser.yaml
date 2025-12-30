@@ -12,6 +12,8 @@ builds:
   - env: ["CGO_ENABLED=0"]
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags: ["-trimpath"]
+    ldflags:
+      - "-X github.com/Benbentwo/ue5/cmd.Version={{ .Version }}"
     targets: ["go_first_class"]
 
 changelog:
