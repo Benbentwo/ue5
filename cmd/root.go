@@ -25,7 +25,7 @@ var rootCmd = &cobra.Command{
 	Use:   "ue5",
 	Short: "UE5 CLI to help build and package Unreal Engine 5 projects",
 	Long:  `UE5 CLI is a command line tool to help build and package Unreal Engine 5 projects.`,
-	Version: Version,
+	Version: "",
 	Run: func(cmd *cobra.Command, args []string) {
 		err := cmd.Help()
 		if err != nil {
@@ -44,6 +44,11 @@ func Execute() {
 }
 
 func PreRun(cmd *cobra.Command, args []string) {
+	versionRequested, err := cmd.Flags().GetBool("version")
+	if err == nil && versionRequested {
+		printVersionInfo(cmd.OutOrStdout(), Version)
+		os.Exit(0)
+	}
 	if cmd.Name() == "help" || cmd.Name() == "version" || cmd.Name() == "ue5" {
 		return
 	}
@@ -110,5 +115,6 @@ func UpdateEnginePath() {
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&projectPathFlag, "project", "p", "", "Path to the project directory (default: current directory)")
 	rootCmd.PersistentFlags().BoolVarP(&Debug, "debug", "d", false, "Enable debug logging")
+	rootCmd.PersistentFlags().Bool("version", false, "Print version and engine information")
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
 }
