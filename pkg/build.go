@@ -38,6 +38,5 @@ func RunEditor(EnginePath, ProjectPath string) error {
 	log.Info("Launching editor", "binary", editorBinary, "project", ProjectPath)
 
 	cmd := exec.Command(editorBinary, ProjectPath)
-	cmd.Start()
-	return nil
+	return cmd.Start()
 }
