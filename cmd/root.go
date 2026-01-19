@@ -49,7 +49,7 @@ func PreRun(cmd *cobra.Command, args []string) {
 		printVersionInfo(cmd.OutOrStdout(), Version)
 		os.Exit(0)
 	}
-	if cmd.Name() == "help" || cmd.Name() == "version" || cmd.Name() == "ue5" {
+	if cmd.Name() == "help" || cmd.Name() == "version" || cmd.Name() == "upgrade" || cmd.Name() == "ue5" {
 		return
 	}
 	if Debug {
