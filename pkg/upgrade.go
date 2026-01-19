@@ -95,7 +95,7 @@ func fetchLatestRelease() (*GitHubRelease, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
@@ -158,10 +158,10 @@ func compareVersions(v1, v2 string) int {
 	for i := 0; i < maxLen; i++ {
 		var n1, n2 int
 		if i < len(parts1) {
-			fmt.Sscanf(parts1[i], "%d", &n1)
+			_, _ = fmt.Sscanf(parts1[i], "%d", &n1)
 		}
 		if i < len(parts2) {
-			fmt.Sscanf(parts2[i], "%d", &n2)
+			_, _ = fmt.Sscanf(parts2[i], "%d", &n2)
 		}
 
 		if n1 < n2 {
@@ -187,7 +187,7 @@ func DownloadAndInstall(info *UpgradeInfo) error {
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	archivePath := filepath.Join(tmpDir, info.AssetName)
 	if err := downloadFile(info.DownloadURL, archivePath); err != nil {
@@ -232,7 +232,7 @@ func downloadFile(url, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download failed with status %d", resp.StatusCode)
@@ -242,7 +242,7 @@ func downloadFile(url, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	_, err = io.Copy(out, resp.Body)
 	return err
@@ -311,7 +311,7 @@ func replaceBinary(newBinary, currentBinary string) error {
 	// On Windows, we need to rename the old binary first
 	if runtime.GOOS == "windows" {
 		oldBinary := currentBinary + ".old"
-		os.Remove(oldBinary) // Remove any existing old binary
+		_ = os.Remove(oldBinary) // Remove any existing old binary
 		if err := os.Rename(currentBinary, oldBinary); err != nil {
 			return fmt.Errorf("failed to rename old binary: %w", err)
 		}
@@ -336,13 +336,13 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer sourceFile.Close()
+	defer func() { _ = sourceFile.Close() }()
 
 	destFile, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer destFile.Close()
+	defer func() { _ = destFile.Close() }()
 
 	_, err = io.Copy(destFile, sourceFile)
 	return err
