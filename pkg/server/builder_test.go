@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -146,7 +147,7 @@ func TestRequestRebuildEmptyLabel(t *testing.T) {
 	manager := NewInstanceManager()
 	b := NewBuildOrchestrator(manager, state, agents)
 
-	_, err := b.RequestRebuild(nil, &RebuildRequest{
+	_, err := b.RequestRebuild(context.TODO(), &RebuildRequest{
 		ProjectPath: "/test/P.uproject",
 		Mode:        BuildModeFull,
 		Label:       "",

@@ -206,7 +206,7 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 }
 
 // executeFullRebuild stops the editor, builds, and restarts.
-func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *BuildRecord) error {
+func (b *BuildOrchestrator) executeFullRebuild(_ context.Context, record *BuildRecord) error {
 	// Step 1: Stop the editor
 	instances := b.manager.ListInstances()
 	for _, inst := range instances {
@@ -268,7 +268,7 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 	if err != nil {
 		return fmt.Errorf("failed to create build log file: %w", err)
 	}
-	defer logFile.Close()
+	defer logFile.Close() //nolint:errcheck
 
 	log.Info("Running UBT build", "target", record.Target, "platform", record.Platform, "config", record.Configuration, "log", logPath)
 
