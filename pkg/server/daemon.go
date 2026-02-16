@@ -20,6 +20,10 @@ type Daemon struct {
 	socketPath string
 	listener   net.Listener
 	manager    *InstanceManager
+	state      *StateStore
+	agents     *AgentRegistry
+	builder    *BuildOrchestrator
+	mcpServer  *mcpServerWrapper
 	version    string
 	startedAt  time.Time
 	ctx        context.Context
@@ -30,9 +34,18 @@ type Daemon struct {
 // NewDaemon creates a new daemon instance.
 func NewDaemon(version string) *Daemon {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	stateStore := NewStateStore()
+	agentRegistry := NewAgentRegistry()
+	instanceManager := NewInstanceManager()
+	builder := NewBuildOrchestrator(instanceManager, stateStore, agentRegistry)
+
 	return &Daemon{
 		socketPath: SocketPath(),
-		manager:    NewInstanceManager(),
+		manager:    instanceManager,
+		state:      stateStore,
+		agents:     agentRegistry,
+		builder:    builder,
 		version:    version,
 		startedAt:  time.Now(),
 		ctx:        ctx,
@@ -45,6 +58,26 @@ func (d *Daemon) Run() error {
 	if err := EnsureHomeDir(); err != nil {
 		return fmt.Errorf("failed to create home directory: %w", err)
 	}
+
+	// Load persisted state
+	if err := d.state.Load(); err != nil {
+		log.Warn("Failed to load state, starting fresh", "error", err)
+	}
+
+	// Wire up instance state change notifications
+	d.manager.SetStateChangeCallback(func(info InstanceInfo, oldState, newState InstanceState) {
+		d.agents.Emit(AgentEvent{
+			Type:      "editor_state_changed",
+			Timestamp: time.Now(),
+			Data: map[string]interface{}{
+				"project_path": info.ProjectPath,
+				"project_name": info.ProjectName,
+				"old_state":    string(oldState),
+				"new_state":    string(newState),
+				"pid":          info.PID,
+			},
+		})
+	})
 
 	// Write PID file
 	if err := d.writePIDFile(); err != nil {
@@ -65,7 +98,23 @@ func (d *Daemon) Run() error {
 	d.listener = listener
 	defer d.cleanup()
 
-	log.Info("Daemon started", "socket", d.socketPath, "pid", os.Getpid(), "version", d.version)
+	// Start MCP SSE server alongside Unix socket
+	d.mcpServer = newMCPServer(d)
+	go func() {
+		mcpAddr := MCPAddr()
+		if err := d.mcpServer.Start(mcpAddr); err != nil {
+			log.Error("MCP server failed", "error", err)
+		}
+	}()
+
+	// Wire agent event callback to broadcast via MCP
+	d.agents.SetEventCallback(func(event AgentEvent) {
+		if d.mcpServer != nil {
+			d.mcpServer.BroadcastEvent(event)
+		}
+	})
+
+	log.Info("Daemon started", "socket", d.socketPath, "mcp", MCPAddr(), "pid", os.Getpid(), "version", d.version)
 
 	// Handle OS signals for graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -151,6 +200,16 @@ func (d *Daemon) handleConnection(conn net.Conn) {
 		d.handleGetLogs(conn, req)
 	case ReqStreamLogs:
 		d.handleStreamLogs(conn, req)
+	case ReqRebuild:
+		d.handleRebuild(conn, req)
+	case ReqGetBuildInfo:
+		d.handleGetBuildInfo(conn, req)
+	case ReqRegisterAgent:
+		d.handleRegisterAgent(conn, req)
+	case ReqUnregisterAgent:
+		d.handleUnregisterAgent(conn, req)
+	case ReqListAgents:
+		d.handleListAgents(conn, req)
 	default:
 		d.sendError(conn, req.ID, fmt.Sprintf("unknown request type: %s", req.Type))
 	}
@@ -273,6 +332,100 @@ func (d *Daemon) handleStreamLogs(conn net.Conn, req Request) {
 	}
 }
 
+func (d *Daemon) handleRebuild(conn net.Conn, req Request) {
+	if req.Rebuild == nil {
+		d.sendError(conn, req.ID, "rebuild field is required")
+		return
+	}
+
+	// Update agent last-seen if agent ID is provided
+	if req.Rebuild.AgentID != "" {
+		d.agents.UpdateLastSeen(req.Rebuild.AgentID)
+	}
+
+	record, err := d.builder.RequestRebuild(d.ctx, req.Rebuild)
+	if err != nil {
+		d.sendError(conn, req.ID, err.Error())
+		return
+	}
+
+	d.sendResponse(conn, Response{
+		ID:      req.ID,
+		Success: true,
+		Build:   record,
+	})
+}
+
+func (d *Daemon) handleGetBuildInfo(conn net.Conn, req Request) {
+	d.sendResponse(conn, Response{
+		ID:      req.ID,
+		Success: true,
+		BuildInfo: &BuildInfoResponse{
+			CurrentBuild:        d.state.GetCurrentBuild(),
+			AccumulatedFeatures: d.state.GetAccumulatedFeatures(),
+			TotalBuilds:         len(d.state.GetState().BuildHistory),
+			RecentBuilds:        d.state.GetBuildHistory(10),
+		},
+	})
+}
+
+func (d *Daemon) handleRegisterAgent(conn net.Conn, req Request) {
+	if req.RegisterAgent == nil {
+		d.sendError(conn, req.ID, "register_agent field is required")
+		return
+	}
+
+	info := AgentInfo{
+		ID:          req.RegisterAgent.ID,
+		Name:        req.RegisterAgent.Name,
+		Description: req.RegisterAgent.Description,
+	}
+	if err := d.agents.Register(info); err != nil {
+		d.sendError(conn, req.ID, err.Error())
+		return
+	}
+
+	// Persist agent list to state
+	d.state.SetActiveAgents(d.agents.List())
+	_ = d.state.Save()
+
+	agentCopy, _ := d.agents.Get(info.ID)
+	d.sendResponse(conn, Response{
+		ID:      req.ID,
+		Success: true,
+		Agent:   agentCopy,
+	})
+}
+
+func (d *Daemon) handleUnregisterAgent(conn net.Conn, req Request) {
+	if req.UnregisterAgent == nil {
+		d.sendError(conn, req.ID, "unregister_agent field is required")
+		return
+	}
+
+	if err := d.agents.Unregister(req.UnregisterAgent.ID); err != nil {
+		d.sendError(conn, req.ID, err.Error())
+		return
+	}
+
+	// Persist agent list to state
+	d.state.SetActiveAgents(d.agents.List())
+	_ = d.state.Save()
+
+	d.sendResponse(conn, Response{
+		ID:      req.ID,
+		Success: true,
+	})
+}
+
+func (d *Daemon) handleListAgents(conn net.Conn, req Request) {
+	d.sendResponse(conn, Response{
+		ID:      req.ID,
+		Success: true,
+		Agents:  d.agents.List(),
+	})
+}
+
 func (d *Daemon) sendResponse(conn net.Conn, resp Response) {
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -292,6 +445,15 @@ func (d *Daemon) sendError(conn net.Conn, id string, msg string) {
 }
 
 func (d *Daemon) shutdown() {
+	// Stop MCP server
+	if d.mcpServer != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := d.mcpServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("Failed to shutdown MCP server", "error", err)
+		}
+	}
+
 	// Stop all running editor instances
 	d.manager.StopAll()
 

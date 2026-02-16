@@ -27,8 +27,9 @@ type ProjectInstance struct {
 
 // InstanceManager tracks all managed editor instances.
 type InstanceManager struct {
-	instances map[string]*ProjectInstance // keyed by absolute project path
-	mu        sync.RWMutex
+	instances     map[string]*ProjectInstance // keyed by absolute project path
+	mu            sync.RWMutex
+	onStateChange func(info InstanceInfo, oldState, newState InstanceState)
 }
 
 // NewInstanceManager creates a new instance manager.
@@ -36,6 +37,13 @@ func NewInstanceManager() *InstanceManager {
 	return &InstanceManager{
 		instances: make(map[string]*ProjectInstance),
 	}
+}
+
+// SetStateChangeCallback sets a function called when instance state changes.
+func (m *InstanceManager) SetStateChangeCallback(fn func(info InstanceInfo, oldState, newState InstanceState)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onStateChange = fn
 }
 
 // Count returns the number of tracked instances.
@@ -162,11 +170,12 @@ func (m *InstanceManager) monitorProcess(inst *ProjectInstance) {
 	close(inst.done) // Signal that the process has exited
 
 	inst.mu.Lock()
-	defer inst.mu.Unlock()
 
 	if inst.capture != nil {
 		inst.capture.Close()
 	}
+
+	oldState := inst.Info.State
 
 	if err != nil {
 		exitCode := -1
@@ -181,6 +190,18 @@ func (m *InstanceManager) monitorProcess(inst *ProjectInstance) {
 		inst.Info.ExitCode = &exitCode
 		inst.Info.State = StateStopped
 		log.Info("Editor process exited cleanly", "project", inst.Info.ProjectName, "pid", inst.Info.PID)
+	}
+
+	newState := inst.Info.State
+	infoCopy := inst.Info
+	inst.mu.Unlock()
+
+	// Notify state change callback (outside of lock)
+	m.mu.RLock()
+	fn := m.onStateChange
+	m.mu.RUnlock()
+	if fn != nil {
+		fn(infoCopy, oldState, newState)
 	}
 }
 

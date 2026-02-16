@@ -1,9 +1,11 @@
 package pkg
 
 import (
-	"github.com/charmbracelet/log"
+	"io"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/charmbracelet/log"
 )
 
 var (
@@ -27,6 +29,20 @@ func RunBuildScript(EnginePath, Target string, Platform string, State string, Pr
 	cmd := exec.Command(buildScript, Target, Platform, State, ProjectPath)
 
 	return RunCmd(cmd)
+}
+
+// RunBuildScriptToWriter runs the build script and pipes all output to the given writer
+// instead of the charmbracelet logger. Used by the daemon's build orchestrator.
+func RunBuildScriptToWriter(enginePath, target, platform, state, projectPath string, output io.Writer) error {
+	osPath := OsStringSliceSwitcher(WindowsBuildScript, UnixBuildScript, UnixBuildScript)
+	basePath := []string{enginePath}
+	pathElements := append(basePath, osPath...)
+	buildScript := filepath.Join(pathElements...)
+
+	cmd := exec.Command(buildScript, target, platform, state, projectPath)
+	cmd.Stdout = output
+	cmd.Stderr = output
+	return cmd.Run()
 }
 
 // EditorBinaryPath returns the full path to the Unreal Editor binary for the given engine installation.
