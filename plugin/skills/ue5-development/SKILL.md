@@ -1,26 +1,34 @@
 ---
 name: ue5-server-mode
-description: This skill should be used when working with the UE5 server daemon for managing Unreal Editor instances, querying captured logs, debugging with log analysis, or when the user mentions "ue5 server", "editor server", "server mode", "captured logs", "log query", or needs to manage editor lifecycle programmatically. Provides knowledge about the server daemon architecture, commands, log querying, and AI-driven debugging workflows.
+description: This skill should be used when working with the UE5 server daemon for managing Unreal Editor instances, triggering AI-driven rebuilds, tracking build metadata, registering as an agent consumer, or when the user mentions "ue5 server", "editor server", "server mode", "rebuild", "build metadata", "MCP", "agent registration", "hot reload", or needs to manage editor lifecycle programmatically. Provides knowledge about the server daemon architecture, AI rebuild system, MCP integration, agent sessions, and multi-agent coordination.
 ---
 
 # UE5 Server Mode
 
-The UE5 CLI includes a Server Mode that runs a background daemon to manage Unreal Editor instances. The daemon captures all editor output (stdout/stderr), tracks process lifecycle, and provides a JSON API for querying status and logs.
+The UE5 CLI includes a Server Mode that runs a background daemon to manage Unreal Editor instances. The daemon captures all editor output (stdout/stderr), tracks process lifecycle, coordinates AI-driven rebuilds with coalescing, and provides both a JSON API and MCP (Model Context Protocol) server for AI agent integration.
 
 ## Architecture
 
 ```
-AI Agent ──► ue5 CLI ──► Unix Socket ──► Daemon Process
-                          ~/.ue5/          │
-                          server.sock      ├─ Instance Manager
-                                           │    ├─ Project A (PID, state, logs)
-                                           │    └─ Project B (PID, state, logs)
-                                           └─ Log Capture
-                                                └─ ~/.ue5/logs/<hash>/editor.log
+AI Agent ──► MCP SSE ──► Daemon Process
+              :9515       │
+AI Agent ──► ue5 CLI ──► Unix Socket
+                          ~/.ue5/         ├─ Instance Manager
+                          server.sock     │    ├─ Project A (PID, state, logs)
+                                          │    └─ Project B (PID, state, logs)
+                                          ├─ State Store
+                                          │    └─ ~/.ue5/state.json
+                                          ├─ Agent Registry
+                                          │    └─ Tracks registered AI sessions
+                                          ├─ Build Orchestrator
+                                          │    └─ Coalescing queue
+                                          └─ MCP SSE Server (:9515)
+                                               └─ Push notifications
 ```
 
-- **Protocol**: Newline-delimited JSON over Unix domain socket
+- **Dual protocol**: Unix socket (CLI) + MCP SSE (AI agents)
 - **Multi-project**: Tracks multiple editor instances by project path
+- **Multi-agent**: Multiple AI agents work concurrently with coalesced rebuilds
 - **Auto-start**: Daemon starts automatically when needed
 
 ## Core Commands
@@ -43,6 +51,29 @@ ue5 server kill --force   # Force stop (SIGKILL)
 ue5 server kill --all     # Stop all managed editors
 ```
 
+### AI-Driven Rebuilds
+```bash
+ue5 server rebuild --label "Added inventory system" --mode full
+ue5 server rebuild --label "Fixed health component" --mode hot_reload
+ue5 server rebuild --label "Updated AI behavior" --mode full --agent my-agent-id
+```
+
+Build modes:
+- **`full`**: Stop editor → build → restart editor. Use when C++ headers changed or major refactoring.
+- **`hot_reload`**: Build in background while editor stays running. Use for .cpp-only changes.
+
+### Build Metadata
+```bash
+ue5 server build-info         # Current build metadata + accumulated features
+ue5 server build-info --json  # Machine-readable
+```
+
+### Agent Management
+```bash
+ue5 server agents         # List registered AI agents
+ue5 server agents --json  # Machine-readable
+```
+
 ### Log Querying
 ```bash
 ue5 server logs                             # Last 100 lines
@@ -57,54 +88,108 @@ ue5 server logs -f                          # Stream (tail -f style)
 ue5 server logs -f --level error            # Stream errors only
 ```
 
-## AI Debugging Workflow
+## MCP Integration
 
-The server mode is designed specifically to support AI-driven debugging workflows:
+The daemon exposes an MCP SSE server on port `9515` (configurable via `UE5_MCP_PORT` env var). AI agents connect to receive push notifications about editor state changes and build events.
 
-### 1. Start a managed session
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `rebuild` | Trigger rebuild (full or hot_reload) with label |
+| `register_agent` | Register AI agent as consumer |
+| `unregister_agent` | Unregister agent |
+| `get_build_info` | Query build metadata and feature history |
+
+### MCP Resources
+
+| URI | Description |
+|-----|-------------|
+| `ue5://build/current` | Current build metadata + accumulated features |
+| `ue5://agents` | Registered agents list |
+| `ue5://instances` | Editor instance states |
+
+### MCP Notifications (push to ALL connected agents)
+
+| Event | When |
+|-------|------|
+| `editor_state_changed` | Instance transitions (running→stopped, etc.) |
+| `rebuild_started` | Build orchestrator begins build |
+| `rebuild_complete` | Build finishes (success or failure) |
+| `agent_registered` | New agent registers |
+| `agent_unregistered` | Agent leaves |
+
+## Multi-Agent Coordination
+
+Multiple AI agents can work on the same codebase simultaneously. Key concepts:
+
+### Build Coalescing
+When multiple agents request rebuilds concurrently, requests are **coalesced** into a single UBT build:
+- Agent A requests rebuild with label "inventory system"
+- Agent B requests rebuild with label "health component" (while A's build runs)
+- Result: one build that includes both changes, both agents notified
+
+### Mode Escalation
+If any agent requests `full` mode, the coalesced build uses `full` mode (most restrictive wins).
+
+### Feature Accumulation
+Each build accumulates features from all previous builds. Query `accumulated_features` to see exactly what's in the current running binary:
 ```bash
-ue5 server run
+ue5 server build-info --json | jq '.accumulated_features'
 ```
 
-### 2. After observing an issue, query errors
+### Agent Registration
+Agents register once to inform the daemon how many consumers exist. All registered agents receive MCP notifications when builds complete or the editor restarts.
+
+## AI Debugging Workflow
+
+### 1. Register as an agent (once per session)
+Via MCP `register_agent` tool or CLI.
+
+### 2. Check current build state
+```bash
+ue5 server build-info --json
+```
+
+### 3. After making code changes, trigger a rebuild
+```bash
+ue5 server rebuild --label "Fixed null pointer in PlayerController" --mode full
+```
+
+### 4. Query errors from the new build
 ```bash
 ue5 server logs --level error --since 2m --json
 ```
 
-### 3. Search for specific patterns
+### 5. Search for specific patterns
 ```bash
 ue5 server logs --pattern "NullPtr|nullptr|Access violation" --lines 200
 ```
 
-### 4. Rebuild cycle (stop → build → start)
-```bash
-ue5 server kill && ue5 build && ue5 server run
-```
-
-### 5. Verify the fix
+### 6. Verify the fix
 ```bash
 ue5 server logs --level error --since 1m
 ```
 
-## Status JSON Format
+## Build Record Format
 
 ```json
 {
-  "daemon_running": true,
-  "version": "1.0.0",
-  "uptime": "2h30m",
-  "instances": [
-    {
-      "project_path": "/path/to/MyGame.uproject",
-      "project_name": "MyGame",
-      "engine_path": "/Users/Shared/Epic Games/UE_5.4",
-      "engine_version": "5.4",
-      "pid": 12345,
-      "state": "running",
-      "started_at": "2026-02-15T10:00:00Z",
-      "log_file": "/Users/user/.ue5/logs/a1b2c3d4e5f6/editor.log"
-    }
-  ]
+  "id": "build-1234567890",
+  "project_path": "/path/to/MyGame.uproject",
+  "labels": ["Added inventory system", "Fixed health component"],
+  "features": ["Login system", "Combat system", "Added inventory system", "Fixed health component"],
+  "contributions": [
+    {"agent_id": "agent-A", "label": "Added inventory system"},
+    {"agent_id": "agent-B", "label": "Fixed health component"}
+  ],
+  "mode": "full",
+  "status": "succeeded",
+  "started_at": "2026-02-15T10:00:00Z",
+  "completed_at": "2026-02-15T10:03:00Z",
+  "target": "MyGameEditor",
+  "platform": "Mac",
+  "configuration": "Development"
 }
 ```
 
@@ -126,12 +211,17 @@ Logs are stored at `~/.ue5/logs/<project-hash>/editor.log` with the format:
 2026-02-15T10:00:00.456Z stderr | LogCore:Warning: Some warning here
 ```
 
+Build logs are stored at `~/.ue5/logs/<project-hash>/build.log`.
+
 ## Key Differences from Raw Shell Commands
 
 | Before (raw commands) | After (server mode) |
 |----------------------|---------------------|
 | `pkill UnrealEditor` (kills ALL instances) | `ue5 server kill` (kills only current project) |
+| `ue5 server kill && ue5 build && ue5 server run` | `ue5 server rebuild --label "..." --mode full` |
 | `tail -f Saved/Logs/*.log` | `ue5 server logs -f` (captured from process stdout) |
 | `grep Error Saved/Logs/*.log` | `ue5 server logs --level error` (parsed and filtered) |
 | No process tracking | `ue5 server status --json` (full lifecycle tracking) |
 | Logs lost on crash | Logs captured to persistent file |
+| No build metadata | `ue5 server build-info` (features, history, status) |
+| Manual multi-agent coordination | Automatic coalescing + MCP notifications |

@@ -36,3 +36,25 @@ This can be overridden by using the `-p` or `--project` flag to specify a differ
 This CLI then runs the same commands that you would run but auto calculates the paths to the engine based on your UProject version and the Unreal Engines installed via your Epic Games Launcher manifests.
 
 Thus with multiple versions of Unreal Engine installed, you can run commands on any project without having to specify the engine version or path.
+
+## Server Mode
+
+The CLI includes a Server Mode that runs a background daemon to manage Unreal Editor instances. Features include:
+
+- **Editor lifecycle management**: Start, stop, and monitor editor instances
+- **Log capture and querying**: All editor stdout/stderr captured, filterable by level, category, pattern
+- **AI-driven rebuilds**: Trigger rebuilds with descriptive labels, choose full or hot reload mode
+- **Build metadata**: Track accumulated features across builds, query build history
+- **Multi-agent coordination**: Multiple AI agents work concurrently with automatic build coalescing
+- **MCP integration**: Push notifications to connected AI agents via SSE (port 9515)
+
+```bash
+ue5 server start                              # Start the daemon
+ue5 server run                                # Launch editor (auto-starts daemon)
+ue5 server rebuild --label "Added feature" --mode full  # Trigger rebuild
+ue5 server build-info --json                  # Query build metadata
+ue5 server logs --level error --since 5m      # Query captured logs
+ue5 server agents --json                      # List registered AI agents
+```
+
+See `ue5 server --help` for all available subcommands.

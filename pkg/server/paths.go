@@ -8,11 +8,13 @@ import (
 )
 
 const (
-	ue5Dir       = ".ue5"
-	socketName   = "server.sock"
-	pidFileName  = "daemon.pid"
-	stateFileName = "state.json"
-	logsDirName  = "logs"
+	ue5Dir         = ".ue5"
+	socketName     = "server.sock"
+	pidFileName    = "daemon.pid"
+	stateFileName  = "state.json"
+	logsDirName    = "logs"
+	buildLogName   = "build.log"
+	mcpDefaultPort = "9515"
 )
 
 // HomeDir returns the base directory for ue5 server state (~/.ue5/).
@@ -58,6 +60,19 @@ func EnsureHomeDir() error {
 // EnsureLogDir creates the log directory for a project if it doesn't exist.
 func EnsureLogDir(projectPath string) error {
 	return os.MkdirAll(LogDir(projectPath), 0755)
+}
+
+// BuildLogFile returns the build log path for a given project.
+func BuildLogFile(projectPath string) string {
+	return filepath.Join(LogDir(projectPath), buildLogName)
+}
+
+// MCPAddr returns the MCP server listen address.
+func MCPAddr() string {
+	if port := os.Getenv("UE5_MCP_PORT"); port != "" {
+		return ":" + port
+	}
+	return ":" + mcpDefaultPort
 }
 
 // projectHash returns the first 12 characters of the SHA-256 hash of the project path.

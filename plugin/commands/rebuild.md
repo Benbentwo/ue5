@@ -1,7 +1,7 @@
 ---
 name: rebuild
-description: Stop editor, rebuild the project, and restart editor
-argument-hint: "[config]"
+description: Stop editor, rebuild the project, and restart editor using the server daemon's build orchestrator
+argument-hint: "[--mode full|hot_reload] [--label description]"
 allowed-tools:
   - Bash
   - Read
@@ -10,46 +10,63 @@ allowed-tools:
 
 # Rebuild UE5 Project
 
-Perform a complete rebuild cycle: stop the running editor, build the project, and restart the editor.
+Trigger a rebuild through the server daemon's build orchestrator. This handles the full lifecycle (stop → build → restart) atomically with build metadata tracking.
 
 ## Arguments
 
-- `config` (optional): Build configuration - Development (default), DebugGame, Shipping, Test
+- `mode` (optional): `full` (default) for stop→build→restart, `hot_reload` for build-in-background
+- `label` (optional): Description of what changed - if not provided, summarize the recent code changes
 
 ## Process
 
-1. **Stop the editor via server daemon**
+1. **Check current build state**
    ```bash
-   ue5 server kill
+   ue5 server build-info --json
    ```
-   - Gracefully stops the managed editor instance
-   - Wait for confirmation before proceeding
+   - Review accumulated features to understand what's already built
+   - Check if a build is currently in progress
 
-2. **Build the project**
+2. **Determine the label**
+   - If the user provided a label, use it
+   - Otherwise, summarize what changed since the last build based on the conversation context
+
+3. **Trigger the rebuild via daemon**
    ```bash
-   ue5 build
+   ue5 server rebuild --label "Description of changes" --mode full
    ```
-   - Uses the existing build command with the project in the current directory
-   - Streams build output for progress monitoring
+   - For C++ header changes or major refactoring: use `--mode full`
+   - For .cpp-only changes: use `--mode hot_reload`
+   - The daemon handles stop→build→restart atomically
+   - If another build is in progress, the request is queued and coalesced
 
-3. **Check build result**
-   - If successful: proceed to start
-   - If failed: display error summary, do NOT start editor
-   - Use `/ue:logs` from previous session to correlate with runtime errors
-
-4. **Start the editor via server daemon**
+4. **Check build result**
    ```bash
-   ue5 server run
+   ue5 server build-info --json
    ```
-   - Launches editor managed by the daemon
-   - Logs are automatically captured from the new session
+   - If succeeded: report success and accumulated features
+   - If failed: query build errors
 
-5. **Verify and report**
+5. **If build failed, query errors**
+   ```bash
+   ue5 server logs --level error --since 5m
+   ```
+   - Analyze compilation errors
+   - Suggest fixes
+   - Do NOT attempt to restart the editor
+
+6. **Verify editor is running (full mode only)**
    ```bash
    ue5 server status --json
    ```
-   - Confirm editor is running
-   - Report build time, any warnings, and new PID
+   - Confirm editor restarted with new build
+   - Report build time and new PID
+
+## Build Modes
+
+| Mode | Use Case | What Happens |
+|------|----------|--------------|
+| `full` | Header changes, major refactoring, new classes | Stop editor → UBT build → restart editor |
+| `hot_reload` | .cpp-only changes, small fixes | UBT build in background, editor stays running |
 
 ## Build Configurations
 
@@ -62,8 +79,9 @@ Perform a complete rebuild cycle: stop the running editor, build the project, an
 
 ## Important Notes
 
-- The full cycle takes time - builds can be several minutes
-- If build fails, editor will NOT be started
-- Check build output for compilation errors
+- The daemon's build orchestrator handles multi-agent coordination automatically
+- If multiple agents request rebuilds, they are coalesced into a single build
+- Build logs are captured to `~/.ue5/logs/<hash>/build.log`
+- If build fails, editor will NOT be restarted (full mode)
 - After build failure, fix code and run `/ue:rebuild` again
 - Logs from the previous editor session are preserved and queryable
