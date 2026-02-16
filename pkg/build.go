@@ -29,11 +29,16 @@ func RunBuildScript(EnginePath, Target string, Platform string, State string, Pr
 	return RunCmd(cmd)
 }
 
-func RunEditor(EnginePath, ProjectPath string) error {
+// EditorBinaryPath returns the full path to the Unreal Editor binary for the given engine installation.
+func EditorBinaryPath(enginePath string) string {
 	osPath := OsStringSliceSwitcher(WindowsEditorBinary, MacEditorBinary, LinuxEditorBinary)
-	basePath := []string{EnginePath}
+	basePath := []string{enginePath}
 	pathElements := append(basePath, osPath...)
-	editorBinary := filepath.Join(pathElements...)
+	return filepath.Join(pathElements...)
+}
+
+func RunEditor(EnginePath, ProjectPath string) error {
+	editorBinary := EditorBinaryPath(EnginePath)
 
 	log.Info("Launching editor", "binary", editorBinary, "project", ProjectPath)
 

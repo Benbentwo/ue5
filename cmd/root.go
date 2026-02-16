@@ -52,6 +52,10 @@ func PreRun(cmd *cobra.Command, args []string) {
 	if cmd.Name() == "help" || cmd.Name() == "version" || cmd.Name() == "upgrade" || cmd.Name() == "ue5" {
 		return
 	}
+	// Skip PreRun for server subcommands — they handle project resolution independently
+	if cmd.Name() == "server" || (cmd.Parent() != nil && cmd.Parent().Name() == "server") {
+		return
+	}
 	if Debug {
 		log.SetLevel(log.DebugLevel)
 	}
