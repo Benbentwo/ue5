@@ -115,6 +115,27 @@ func TestDefaultTargetFromProject(t *testing.T) {
 	}
 }
 
+func TestBareEditorTargetOverridden(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	record := b.createRecord([]RebuildRequest{
+		{
+			ProjectPath: "/Games/IslandSurvival.uproject",
+			Mode:        BuildModeFull,
+			Label:       "test",
+			Target:      "Editor",
+		},
+	})
+
+	if record.Target != "IslandSurvivalEditor" {
+		t.Errorf("Expected target 'IslandSurvivalEditor', got '%s'", record.Target)
+	}
+}
+
 func TestCustomTargetPreserved(t *testing.T) {
 	state := NewStateStore()
 	state.path = filepath.Join(t.TempDir(), "state.json")

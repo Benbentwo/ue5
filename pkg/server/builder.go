@@ -117,8 +117,8 @@ func (b *BuildOrchestrator) createRecord(requests []RebuildRequest) *BuildRecord
 
 	// Resolve defaults from the first request
 	first := requests[0]
-	if record.Target == "" {
-		projectName := strings.TrimSuffix(filepath.Base(first.ProjectPath), filepath.Ext(first.ProjectPath))
+	projectName := strings.TrimSuffix(filepath.Base(first.ProjectPath), filepath.Ext(first.ProjectPath))
+	if record.Target == "" || record.Target == "Editor" {
 		record.Target = projectName + "Editor"
 	}
 	if record.Configuration == "" {
@@ -225,12 +225,18 @@ func (b *BuildOrchestrator) executeFullRebuild(_ context.Context, record *BuildR
 	}
 
 	// Step 3: Restart the editor
-	// Find the engine path from the last known instance or the first request
+	// Find the engine path from the last known instance, then fall back to .uproject manifest lookup
 	enginePath := ""
 	for _, inst := range instances {
 		if inst.ProjectPath == record.ProjectPath {
 			enginePath = inst.EnginePath
 			break
+		}
+	}
+	if enginePath == "" {
+		uproject, err := pkg.NewUprojectE(record.ProjectPath)
+		if err == nil && uproject.EngineAssociation != "" {
+			enginePath = pkg.GetEnginePath(uproject.EngineAssociation)
 		}
 	}
 	if enginePath == "" {
@@ -272,13 +278,19 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 
 	log.Info("Running UBT build", "target", record.Target, "platform", record.Platform, "config", record.Configuration, "log", logPath)
 
-	// Resolve engine path from the project's instance info
+	// Resolve engine path: try active instances first, then fall back to .uproject manifest lookup
 	enginePath := ""
 	instances := b.manager.ListInstances()
 	for _, inst := range instances {
 		if inst.ProjectPath == record.ProjectPath {
 			enginePath = inst.EnginePath
 			break
+		}
+	}
+	if enginePath == "" {
+		uproject, err := pkg.NewUprojectE(record.ProjectPath)
+		if err == nil && uproject.EngineAssociation != "" {
+			enginePath = pkg.GetEnginePath(uproject.EngineAssociation)
 		}
 	}
 	if enginePath == "" {
