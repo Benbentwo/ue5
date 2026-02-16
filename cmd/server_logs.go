@@ -106,7 +106,9 @@ Use --follow to stream new log lines in real-time.`,
 		if logsJSON {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
-			enc.Encode(resp.Logs)
+			if err := enc.Encode(resp.Logs); err != nil {
+				log.Error("Failed to encode logs", "error", err)
+			}
 			return
 		}
 

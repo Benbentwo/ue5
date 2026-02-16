@@ -19,7 +19,7 @@ func QueryLogs(req *GetLogsRequest) (*LogsResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	// Parse the "since" filter if provided
 	var sinceTime time.Time

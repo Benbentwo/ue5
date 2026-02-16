@@ -115,10 +115,10 @@ func (d *Daemon) acceptLoop() {
 
 // handleConnection reads a request from the connection and dispatches it.
 func (d *Daemon) handleConnection(conn net.Conn) {
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	// Set a read deadline to prevent hung connections
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
@@ -257,7 +257,7 @@ func (d *Daemon) handleStreamLogs(conn net.Conn, req Request) {
 	}
 
 	// Remove all deadlines for streaming (both read and write)
-	conn.SetDeadline(time.Time{})
+	_ = conn.SetDeadline(time.Time{})
 
 	encoder := json.NewEncoder(conn)
 	for line := range ch {
@@ -280,7 +280,7 @@ func (d *Daemon) sendResponse(conn net.Conn, resp Response) {
 		return
 	}
 	data = append(data, '\n')
-	conn.Write(data)
+	_, _ = conn.Write(data)
 }
 
 func (d *Daemon) sendError(conn net.Conn, id string, msg string) {
@@ -297,7 +297,7 @@ func (d *Daemon) shutdown() {
 
 	// Close the listener to stop accepting new connections
 	if d.listener != nil {
-		d.listener.Close()
+		_ = d.listener.Close()
 	}
 
 	// Wait for in-flight connections to finish
@@ -305,7 +305,7 @@ func (d *Daemon) shutdown() {
 }
 
 func (d *Daemon) cleanup() {
-	os.Remove(d.socketPath)
+	_ = os.Remove(d.socketPath)
 }
 
 func (d *Daemon) writePIDFile() error {
@@ -314,7 +314,7 @@ func (d *Daemon) writePIDFile() error {
 }
 
 func (d *Daemon) removePIDFile() {
-	os.Remove(DaemonPIDFile())
+	_ = os.Remove(DaemonPIDFile())
 }
 
 func (d *Daemon) cleanupSocket() error {

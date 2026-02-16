@@ -50,7 +50,9 @@ var serverStatusCmd = &cobra.Command{
 			}
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
-			enc.Encode(output)
+			if err := enc.Encode(output); err != nil {
+				log.Error("Failed to encode status", "error", err)
+			}
 			return
 		}
 

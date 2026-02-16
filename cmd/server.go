@@ -13,7 +13,7 @@ and provides an API for starting, stopping, and querying editor state.
 Use 'ue5 server start' to launch the daemon, or commands like 'ue5 server run'
 will auto-start it when needed.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		cmd.Help()
+		_ = cmd.Help()
 	},
 }
 

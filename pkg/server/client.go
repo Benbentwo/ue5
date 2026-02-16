@@ -30,11 +30,11 @@ func (c *Client) Send(req Request) (*Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	// Set deadlines
-	conn.SetWriteDeadline(time.Now().Add(c.timeout))
-	conn.SetReadDeadline(time.Now().Add(c.timeout))
+	_ = conn.SetWriteDeadline(time.Now().Add(c.timeout))
+	_ = conn.SetReadDeadline(time.Now().Add(c.timeout))
 
 	// Send request
 	data, err := json.Marshal(req)
@@ -73,30 +73,30 @@ func (c *Client) Stream(req Request) (<-chan *Response, func(), error) {
 	}
 
 	// Send request
-	conn.SetWriteDeadline(time.Now().Add(c.timeout))
+	_ = conn.SetWriteDeadline(time.Now().Add(c.timeout))
 	data, err := json.Marshal(req)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 	data = append(data, '\n')
 
 	if _, err := conn.Write(data); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
 	// Remove read deadline for streaming
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 
 	ch := make(chan *Response, 64)
 	cancel := func() {
-		conn.Close()
+		_ = conn.Close()
 	}
 
 	go func() {
 		defer close(ch)
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck
 
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {

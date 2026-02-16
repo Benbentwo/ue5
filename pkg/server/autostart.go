@@ -42,7 +42,7 @@ func EnsureDaemon() error {
 	}
 
 	// Release the child process so it doesn't become a zombie
-	cmd.Process.Release()
+	_ = cmd.Process.Release()
 
 	// Poll until the daemon is responsive (up to 5 seconds)
 	deadline := time.Now().Add(5 * time.Second)

@@ -125,7 +125,7 @@ func (lc *LogCapture) CaptureStream(r io.Reader, streamLabel string) {
 		// Write to log file
 		logLine := fmt.Sprintf("%s %s | %s\n", now.Format(time.RFC3339Nano), streamLabel, raw)
 		lc.mu.Lock()
-		lc.file.WriteString(logLine)
+		_, _ = lc.file.WriteString(logLine)
 		lc.ring.Push(event)
 		lc.mu.Unlock()
 
@@ -168,8 +168,8 @@ func (lc *LogCapture) Close() {
 	lc.mu.Lock()
 	lc.closed = true
 	if lc.file != nil {
-		lc.file.Sync()
-		lc.file.Close()
+		_ = lc.file.Sync()
+		_ = lc.file.Close()
 	}
 	lc.mu.Unlock()
 

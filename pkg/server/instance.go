@@ -206,11 +206,11 @@ func (m *InstanceManager) StopEditor(projectPath string, force bool) (*InstanceI
 
 	if force {
 		if inst.cmd.Process != nil {
-			inst.cmd.Process.Kill()
+			_ = inst.cmd.Process.Kill()
 		}
 	} else {
 		if inst.cmd.Process != nil {
-			inst.cmd.Process.Signal(syscall.SIGTERM)
+			_ = inst.cmd.Process.Signal(syscall.SIGTERM)
 		}
 
 		// Wait for monitorProcess to detect exit, with timeout
@@ -220,7 +220,7 @@ func (m *InstanceManager) StopEditor(projectPath string, force bool) (*InstanceI
 		case <-time.After(10 * time.Second):
 			log.Warn("Editor did not exit gracefully, force killing", "project", inst.Info.ProjectName)
 			if inst.cmd.Process != nil {
-				inst.cmd.Process.Kill()
+				_ = inst.cmd.Process.Kill()
 			}
 			// Wait for monitorProcess to finish
 			<-inst.done
