@@ -68,11 +68,7 @@ func streamOutput(r io.Reader, label string) {
 		case LogLevelWarning:
 			log.WithPrefix("|").Warn(line)
 		default:
-			if label == "stderr" {
-				log.WithPrefix("|").Warn(line)
-			} else {
-				log.WithPrefix("|").Info(line)
-			}
+			log.WithPrefix("|").Info(line)
 		}
 	}
 	if err := scanner.Err(); err != nil {
