@@ -4,6 +4,25 @@ This is a command line interface for Unreal Engine 5, designed to simplify the p
 
 This is very similar to Adam Rehn's [ue4 cli](https://docs.adamrehn.com/ue4cli/overview/introduction-to-ue4cli/), but built with GO as to avoid Python dependencies and to provide a more robust solution.
 
+## Installation
+Prerequisites: Go 1.24+.
+
+From the repo root:
+```console
+go install .
+```
+
+This installs the `ue5` binary to `$(go env GOPATH)/bin` (or `$(go env GOBIN)` if set). Make sure that directory is on your `PATH`.
+
+### Install from GitHub release (no repo clone)
+1) Go to the project GitHub Releases page and download the asset for your OS/arch.
+2) Extract it (if it is a .zip or .tar.gz).
+3) Make it executable and move it onto your PATH:
+```console
+chmod +x ue5
+mv ue5 /usr/local/bin/ue5
+```
+
 ## Usage
 ```conosle
 UE5 CLI is a command line tool to help build and package Unreal Engine 5 projects.
