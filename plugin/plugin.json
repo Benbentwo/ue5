@@ -1,5 +1,5 @@
 {
-  "name": "unreal-engine",
-  "description": "Unreal Engine 5 development tools - editor lifecycle management, AI-driven rebuilds, log analysis, and MCP integration",
+  "name": "uem",
+  "description": "Unreal Editor Manager - editor lifecycle management, AI-driven rebuilds, log analysis, and MCP integration for UE5",
   "version": "1.0.0"
 }

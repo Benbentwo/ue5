@@ -72,7 +72,7 @@ ue5 server logs --lines 0
 
 ## Important Notes
 
-- Logs are only captured for editor instances started via `ue5 server run` or `/ue:start`
+- Logs are only captured for editor instances started via `ue5 server run` or `/uem:start`
 - Use `--json` flag for machine-readable output when doing programmatic analysis
 - The `--since` flag accepts Go duration strings (5m, 1h, 30s) or RFC3339 timestamps
 - Log categories match UE5 log categories (LogInit, LogCompile, LogBlueprint, LogTemp, etc.)

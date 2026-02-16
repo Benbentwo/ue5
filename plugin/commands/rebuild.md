@@ -83,5 +83,5 @@ Trigger a rebuild through the server daemon's build orchestrator. This handles t
 - If multiple agents request rebuilds, they are coalesced into a single build
 - Build logs are captured to `~/.ue5/logs/<hash>/build.log`
 - If build fails, editor will NOT be restarted (full mode)
-- After build failure, fix code and run `/ue:rebuild` again
+- After build failure, fix code and run `/uem:rebuild` again
 - Logs from the previous editor session are preserved and queryable
