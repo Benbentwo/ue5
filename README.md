@@ -77,3 +77,23 @@ ue5 server agents --json                      # List registered AI agents
 ```
 
 See `ue5 server --help` for all available subcommands.
+
+### Dashboard
+
+The daemon ships a web dashboard that shows real-time build status, editor instances, and connected AI agents. It starts automatically with the daemon on port **9516** (override with the `UE5_DASHBOARD_PORT` environment variable).
+
+Key features:
+- **Live updates** via Server-Sent Events (SSE) — no polling required
+- **Trigger rebuilds** and **start/stop the editor** directly from the UI
+
+**Development** — run the Vite dev server with hot reload (proxies API requests to the Go backend on `:9516`):
+
+```bash
+cd dashboard && npm run dev
+```
+
+**Production** — embed the compiled frontend into the Go binary:
+
+```bash
+scripts/build-dashboard.sh
+```

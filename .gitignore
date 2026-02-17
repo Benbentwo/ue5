@@ -3,3 +3,4 @@ dist/
 .idea/
 dashboard/node_modules/
 dashboard/dist/
+pkg/server/dashboard_dist/
