@@ -132,6 +132,18 @@ Emitted when agents block a restart. Data:
 
 This lets the requesting agent know why the rebuild is delayed.
 
+## Bug Fix: Crash Detection for Daemon-Requested Stops
+
+### Problem
+
+`monitorProcess` in `instance.go` treats ALL non-zero exits as `StateCrashed`, even when the daemon sent SIGTERM via `StopEditor` (which sets state to `StateStopping` first). A SIGTERM exit produces a non-zero exit code, so daemon-requested stops are misreported as crashes.
+
+### Fix
+
+In `monitorProcess`, check `oldState` before deciding crash vs stop:
+- If `oldState == StateStopping` → the daemon requested this → `StateStopped`
+- If `oldState == StateRunning` or `StateStarting` → unexpected exit → `StateCrashed`
+
 ## What Does NOT Change
 
 - Build coalescing logic (requests queue normally)
