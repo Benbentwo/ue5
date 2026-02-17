@@ -7,9 +7,6 @@ before:
     - bash -c "cd dashboard && npm ci && npm run build"
     - bash -c "rm -rf pkg/server/dashboard_dist && cp -r dashboard/dist pkg/server/dashboard_dist"
 
-gomod:
-  proxy: true
-
 builds:
   - env: ["CGO_ENABLED=0"]
     mod_timestamp: "{{ .CommitTimestamp }}"
