@@ -127,6 +127,11 @@ Always check server status before and after operations:
 ue5 server status --json
 ```
 
+When starting the editor, wait on daemon state instead of sleeping:
+```bash
+ue5 server run --wait --timeout 120s --json
+```
+
 **Output Format:**
 
 After each operation, report:
@@ -141,6 +146,7 @@ After each operation, report:
 - Always provide a descriptive `--label` summarizing what changed
 - Use `ue5 server build-info --json` to check what's already built before rebuilding
 - Use `ue5 server status --json` to check state before operations
+- Never use blind `sleep` to wait for startup; use `ue5 server run --wait` or poll `ue5 server status --json`
 - Don't start editor manually if build failed (daemon handles this)
 - Report all errors clearly with file/line references
 - Suggest specific fixes, not generic advice

@@ -44,7 +44,8 @@ ue5 server status --json  # Machine-readable JSON status
 
 ### Editor Lifecycle
 ```bash
-ue5 server run            # Start editor for current project (auto-starts daemon)
+ue5 server run --wait --timeout 120s --json  # Start editor and wait for running state
+ue5 server run            # Start editor without waiting
 ue5 server run -p /path/to/Project.uproject  # Specify project explicitly
 ue5 server kill           # Stop editor for current project (SIGTERM)
 ue5 server kill --force   # Force stop (SIGKILL)

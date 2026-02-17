@@ -15,6 +15,11 @@ import (
 	"github.com/charmbracelet/log"
 )
 
+const (
+	startupPollInterval = 200 * time.Millisecond
+	startupLogTimeout   = 30 * time.Second
+)
+
 // ProjectInstance is the runtime representation of a managed editor instance.
 type ProjectInstance struct {
 	Info    InstanceInfo
@@ -140,7 +145,6 @@ func (m *InstanceManager) StartEditor(req *StartEditorRequest) (*InstanceInfo, e
 	}
 
 	info.PID = cmd.Process.Pid
-	info.State = StateRunning
 
 	inst := &ProjectInstance{
 		Info:    info,
@@ -158,9 +162,55 @@ func (m *InstanceManager) StartEditor(req *StartEditorRequest) (*InstanceInfo, e
 
 	// Monitor process lifecycle — this is the sole owner of cmd.Wait()
 	go m.monitorProcess(inst)
+	// Transition from starting -> running once startup output arrives (or timeout fallback).
+	go m.markRunningWhenReady(inst)
 
-	log.Info("Started editor", "project", projectName, "pid", info.PID, "log", logFilePath)
+	log.Info("Started editor process", "project", projectName, "pid", info.PID, "state", info.State, "log", logFilePath)
 	return &info, nil
+}
+
+// markRunningWhenReady updates instance state to running after startup output is seen.
+// If no output arrives within a bounded timeout, it still marks running to avoid a stuck starting state.
+func (m *InstanceManager) markRunningWhenReady(inst *ProjectInstance) {
+	deadline := time.Now().Add(startupLogTimeout)
+	ticker := time.NewTicker(startupPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-inst.done:
+			return
+		case <-ticker.C:
+			hasOutput := len(inst.capture.RecentLines(1)) > 0
+			timedOut := time.Now().After(deadline)
+			if !hasOutput && !timedOut {
+				continue
+			}
+
+			inst.mu.Lock()
+			oldState := inst.Info.State
+			if oldState != StateStarting {
+				inst.mu.Unlock()
+				return
+			}
+			inst.Info.State = StateRunning
+			infoCopy := inst.Info
+			inst.mu.Unlock()
+
+			if timedOut {
+				log.Warn("Startup readiness timed out, marking instance running",
+					"project", infoCopy.ProjectName, "pid", infoCopy.PID, "timeout", startupLogTimeout.String())
+			}
+
+			m.mu.RLock()
+			fn := m.onStateChange
+			m.mu.RUnlock()
+			if fn != nil {
+				fn(infoCopy, oldState, StateRunning)
+			}
+			return
+		}
+	}
 }
 
 // monitorProcess waits for the editor process to exit and updates the instance state.
