@@ -11,26 +11,13 @@ gomod:
   proxy: true
 
 builds:
-  - id: ue5
-    env: ["CGO_ENABLED=0"]
+  - env: ["CGO_ENABLED=0"]
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags: ["-trimpath"]
     tags: ["embed_dashboard"]
     ldflags:
       - "-X github.com/Benbentwo/ue5/cmd.Version={{ .Version }}"
     targets: ["go_first_class"]
-
-signs:
-  - cmd: gpg
-    args:
-      - "--batch"
-      - "--local-user"
-      - "{{ .Env.GPG_FINGERPRINT }}"
-      - "--output"
-      - "${signature}"
-      - "--detach-sign"
-      - "${artifact}"
-    artifacts: checksum
 
 changelog:
   sort: asc
