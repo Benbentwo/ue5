@@ -161,8 +161,19 @@ func (w *mcpServerWrapper) RequestRestartApproval(ctx context.Context) (approved
 
 	for _, entry := range entries {
 		go func(e sessionEntry) {
-			samplingCtx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
+			// Merge caller context (build orchestrator) with session context
+			// so cancellation from either side stops the sampling request.
+			mergedCtx, mergeCancel := context.WithCancel(e.ctx)
+			go func() {
+				select {
+				case <-ctx.Done():
+					mergeCancel()
+				case <-mergedCtx.Done():
+				}
+			}()
+			samplingCtx, cancel := context.WithTimeout(mergedCtx, 30*time.Second)
 			defer cancel()
+			defer mergeCancel()
 
 			mcpSrv := mcpserver.ServerFromContext(e.ctx)
 			if mcpSrv == nil {
@@ -207,8 +218,8 @@ func parseRestartResponse(resp *mcp.CreateMessageResult) bool {
 	if tc, ok := resp.Content.(mcp.TextContent); ok {
 		text = tc.Text
 	}
-	lower := strings.ToLower(strings.TrimSpace(text))
-	if noWordRegexp.MatchString(lower) {
+	trimmed := strings.TrimSpace(text)
+	if noWordRegexp.MatchString(trimmed) {
 		return false
 	}
 	return true
