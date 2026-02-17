@@ -8,13 +8,14 @@ import (
 )
 
 const (
-	ue5Dir         = ".ue5"
-	socketName     = "server.sock"
-	pidFileName    = "daemon.pid"
-	stateFileName  = "state.json"
-	logsDirName    = "logs"
-	buildLogName   = "build.log"
-	mcpDefaultPort = "9515"
+	ue5Dir               = ".ue5"
+	socketName           = "server.sock"
+	pidFileName          = "daemon.pid"
+	stateFileName        = "state.json"
+	logsDirName          = "logs"
+	buildLogName         = "build.log"
+	mcpDefaultPort       = "9515"
+	dashboardDefaultPort = "9516"
 )
 
 // HomeDir returns the base directory for ue5 server state (~/.ue5/).
@@ -73,6 +74,14 @@ func MCPAddr() string {
 		return ":" + port
 	}
 	return ":" + mcpDefaultPort
+}
+
+// DashboardAddr returns the dashboard server listen address.
+func DashboardAddr() string {
+	if port := os.Getenv("UE5_DASHBOARD_PORT"); port != "" {
+		return ":" + port
+	}
+	return ":" + dashboardDefaultPort
 }
 
 // projectHash returns the first 12 characters of the SHA-256 hash of the project path.
