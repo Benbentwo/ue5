@@ -262,11 +262,25 @@ func (w *mcpServerWrapper) handleUnregisterAgent(ctx context.Context, req mcp.Ca
 }
 
 func (w *mcpServerWrapper) handleGetBuildInfo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	info := &BuildInfoResponse{
-		CurrentBuild:        w.daemon.state.GetCurrentBuild(),
+	current := w.daemon.state.GetCurrentBuild()
+	recent := w.daemon.state.GetBuildHistory(3)
+
+	var currentSummary *BuildSummary
+	if current != nil {
+		s := NewBuildSummary(*current)
+		currentSummary = &s
+	}
+
+	recentSummaries := make([]BuildSummary, len(recent))
+	for i, r := range recent {
+		recentSummaries[i] = NewBuildSummary(r)
+	}
+
+	info := &CompactBuildInfoResponse{
+		CurrentBuild:        currentSummary,
 		AccumulatedFeatures: w.daemon.state.GetAccumulatedFeatures(),
 		TotalBuilds:         len(w.daemon.state.GetState().BuildHistory),
-		RecentBuilds:        w.daemon.state.GetBuildHistory(10),
+		RecentBuilds:        recentSummaries,
 	}
 
 	data, _ := json.MarshalIndent(info, "", "  ")
