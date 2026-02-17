@@ -69,7 +69,7 @@ The CLI includes a Server Mode that runs a background daemon to manage Unreal Ed
 
 ```bash
 ue5 server start                              # Start the daemon
-ue5 server run                                # Launch editor (auto-starts daemon)
+ue5 server run --wait --timeout 120s --json  # Launch editor and wait for running state
 ue5 server rebuild --label "Added feature" --mode full  # Trigger rebuild
 ue5 server build-info --json                  # Query build metadata
 ue5 server logs --level error --since 5m      # Query captured logs

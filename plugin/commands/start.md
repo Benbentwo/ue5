@@ -15,11 +15,13 @@ Launch Unreal Editor with the project in the current directory, managed by the u
 
 1. **Start the editor via the server daemon**
    ```bash
-   ue5 server run
+   ue5 server run --wait --timeout 120s --json
    ```
    - This auto-starts the daemon if not already running
    - The daemon manages the editor process lifecycle and captures all logs
+   - `--wait` blocks until the instance is actually `running`
    - If a `--project` flag is needed, use `ue5 server run -p /path/to/Project.uproject`
+   - Do not use blind `sleep` calls for startup waiting
 
 2. **Verify startup**
    ```bash
