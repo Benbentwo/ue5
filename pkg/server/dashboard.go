@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"sync"
 	"time"
@@ -92,6 +93,24 @@ func (ds *dashboardServer) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/editor/start", cors(ds.handleEditorStart))
 	mux.HandleFunc("POST /api/editor/stop", cors(ds.handleEditorStop))
 	mux.HandleFunc("GET /api/events", cors(ds.handleSSE))
+
+	// Serve embedded static files (production) or nothing (dev — use Vite)
+	if hasDashboardStatic() {
+		staticFS := dashboardStaticFS()
+		fileServer := http.FileServer(http.FS(staticFS))
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			if path == "/" {
+				path = "index.html"
+			} else {
+				path = path[1:] // strip leading /
+			}
+			if _, err := fs.Stat(staticFS, path); err != nil {
+				r.URL.Path = "/"
+			}
+			fileServer.ServeHTTP(w, r)
+		})
+	}
 
 	return mux
 }
