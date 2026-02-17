@@ -86,7 +86,9 @@ func TestDashboardAgentsEndpoint(t *testing.T) {
 	ds := newTestDashboard()
 	mux := ds.routes()
 
-	ds.agents.Register(AgentInfo{ID: "test-1", Name: "Test Agent", Description: "Testing"})
+	if err := ds.agents.Register(AgentInfo{ID: "test-1", Name: "Test Agent", Description: "Testing"}); err != nil {
+		t.Fatalf("failed to register agent: %v", err)
+	}
 
 	req := httptest.NewRequest("GET", "/api/agents", nil)
 	w := httptest.NewRecorder()

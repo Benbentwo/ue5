@@ -1,14 +1,13 @@
 package server
 
 import (
-	"os"
 	"testing"
 )
 
 func TestDashboardAddr(t *testing.T) {
 	t.Run("default port", func(t *testing.T) {
 		// Ensure env var is unset for this test.
-		os.Unsetenv("UE5_DASHBOARD_PORT")
+		t.Setenv("UE5_DASHBOARD_PORT", "")
 
 		got := DashboardAddr()
 		want := ":9516"
