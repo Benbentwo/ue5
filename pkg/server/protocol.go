@@ -140,10 +140,40 @@ type UnregisterAgentRequest struct {
 
 // BuildInfoResponse is returned for get_build_info requests.
 type BuildInfoResponse struct {
-	CurrentBuild        *BuildRecord `json:"current_build,omitempty"`
-	AccumulatedFeatures []string     `json:"accumulated_features"`
-	TotalBuilds         int          `json:"total_builds"`
+	CurrentBuild        *BuildRecord  `json:"current_build,omitempty"`
+	AccumulatedFeatures []string      `json:"accumulated_features"`
+	TotalBuilds         int           `json:"total_builds"`
 	RecentBuilds        []BuildRecord `json:"recent_builds"`
+}
+
+// BuildSummary is a compact representation of a BuildRecord for MCP responses.
+type BuildSummary struct {
+	ID        string      `json:"id"`
+	Status    BuildStatus `json:"status"`
+	Labels    []string    `json:"labels"`
+	Mode      BuildMode   `json:"mode"`
+	StartedAt time.Time   `json:"started_at"`
+	Error     string      `json:"error,omitempty"`
+}
+
+// NewBuildSummary creates a compact summary from a full BuildRecord.
+func NewBuildSummary(r BuildRecord) BuildSummary {
+	return BuildSummary{
+		ID:        r.ID,
+		Status:    r.Status,
+		Labels:    r.Labels,
+		Mode:      r.Mode,
+		StartedAt: r.StartedAt,
+		Error:     r.Error,
+	}
+}
+
+// CompactBuildInfoResponse is a smaller build info payload for MCP tool responses.
+type CompactBuildInfoResponse struct {
+	CurrentBuild        *BuildSummary  `json:"current_build,omitempty"`
+	AccumulatedFeatures []string       `json:"accumulated_features"`
+	TotalBuilds         int            `json:"total_builds"`
+	RecentBuilds        []BuildSummary `json:"recent_builds"`
 }
 
 // Response is the envelope for all server-to-client messages.
