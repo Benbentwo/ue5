@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -24,6 +25,7 @@ type Daemon struct {
 	agents     *AgentRegistry
 	builder    *BuildOrchestrator
 	mcpServer  *mcpServerWrapper
+	dashboard  *dashboardServer
 	version    string
 	startedAt  time.Time
 	ctx        context.Context
@@ -107,14 +109,26 @@ func (d *Daemon) Run() error {
 		}
 	}()
 
-	// Wire agent event callback to broadcast via MCP
+	// Start dashboard web server alongside MCP
+	d.dashboard = newDashboardServer(d)
+	go func() {
+		dashAddr := DashboardAddr()
+		if err := d.dashboard.Start(dashAddr); err != nil && err != http.ErrServerClosed {
+			log.Error("Dashboard server failed", "error", err)
+		}
+	}()
+
+	// Wire agent event callback to broadcast via MCP and dashboard
 	d.agents.SetEventCallback(func(event AgentEvent) {
 		if d.mcpServer != nil {
 			d.mcpServer.BroadcastEvent(event)
 		}
+		if d.dashboard != nil {
+			d.dashboard.BroadcastEvent(event)
+		}
 	})
 
-	log.Info("Daemon started", "socket", d.socketPath, "mcp", MCPAddr(), "pid", os.Getpid(), "version", d.version)
+	log.Info("Daemon started", "socket", d.socketPath, "mcp", MCPAddr(), "dashboard", DashboardAddr(), "pid", os.Getpid(), "version", d.version)
 
 	// Handle OS signals for graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -451,6 +465,15 @@ func (d *Daemon) shutdown() {
 		defer shutdownCancel()
 		if err := d.mcpServer.Shutdown(shutdownCtx); err != nil {
 			log.Error("Failed to shutdown MCP server", "error", err)
+		}
+	}
+
+	// Stop dashboard server
+	if d.dashboard != nil {
+		dashCtx, dashCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer dashCancel()
+		if err := d.dashboard.Shutdown(dashCtx); err != nil {
+			log.Error("Failed to shutdown dashboard server", "error", err)
 		}
 	}
 
