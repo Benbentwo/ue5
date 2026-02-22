@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +33,7 @@ func newMCPServer(d *Daemon) *mcpServerWrapper {
 		mcpserver.WithToolCapabilities(true),
 		mcpserver.WithResourceCapabilities(true, true),
 	)
+	s.EnableSampling()
 
 	w := &mcpServerWrapper{
 		mcp:      s,
@@ -108,6 +111,115 @@ func (w *mcpServerWrapper) BroadcastEvent(event AgentEvent) {
 			log.Debug("Failed to send MCP notification", "event", event.Type, "error", err)
 		}
 	}
+}
+
+// RequestRestartApproval asks all connected MCP clients whether they are okay
+// with an editor restart. Returns true if all agents approve (or if no agents
+// are connected). Returns false with a list of blocking session IDs if any
+// agent is busy or fails to respond.
+func (w *mcpServerWrapper) RequestRestartApproval(ctx context.Context) (approved bool, blockingAgents []string) {
+	w.sessionsMu.RLock()
+	if len(w.sessions) == 0 {
+		w.sessionsMu.RUnlock()
+		return true, nil
+	}
+
+	// Snapshot sessions
+	type sessionEntry struct {
+		id  string
+		ctx context.Context
+	}
+	entries := make([]sessionEntry, 0, len(w.sessions))
+	for id, sCtx := range w.sessions {
+		entries = append(entries, sessionEntry{id: id, ctx: sCtx})
+	}
+	w.sessionsMu.RUnlock()
+
+	samplingReq := mcp.CreateMessageRequest{
+		CreateMessageParams: mcp.CreateMessageParams{
+			Messages: []mcp.SamplingMessage{
+				{
+					Role: mcp.RoleUser,
+					Content: mcp.TextContent{
+						Type: "text",
+						Text: "A rebuild has been requested that requires restarting the Unreal Editor. " +
+							"Are you currently performing any work in the Unreal Editor that would be " +
+							"disrupted by a restart? Respond with ONLY 'yes' or 'no'.",
+					},
+				},
+			},
+			MaxTokens: 10,
+		},
+	}
+
+	type result struct {
+		sessionID string
+		busy      bool
+	}
+
+	results := make(chan result, len(entries))
+
+	for _, entry := range entries {
+		go func(e sessionEntry) {
+			// Merge caller context (build orchestrator) with session context
+			// so cancellation from either side stops the sampling request.
+			mergedCtx, mergeCancel := context.WithCancel(e.ctx)
+			go func() {
+				select {
+				case <-ctx.Done():
+					mergeCancel()
+				case <-mergedCtx.Done():
+				}
+			}()
+			samplingCtx, cancel := context.WithTimeout(mergedCtx, 30*time.Second)
+			defer cancel()
+			defer mergeCancel()
+
+			mcpSrv := mcpserver.ServerFromContext(e.ctx)
+			if mcpSrv == nil {
+				results <- result{sessionID: e.id, busy: true}
+				return
+			}
+
+			resp, err := mcpSrv.RequestSampling(samplingCtx, samplingReq)
+			if err != nil {
+				log.Debug("Sampling request failed, treating as busy", "session", e.id, "error", err)
+				results <- result{sessionID: e.id, busy: true}
+				return
+			}
+
+			results <- result{sessionID: e.id, busy: parseRestartResponse(resp)}
+		}(entry)
+	}
+
+	for range entries {
+		r := <-results
+		if r.busy {
+			blockingAgents = append(blockingAgents, r.sessionID)
+		}
+	}
+
+	return len(blockingAgents) == 0, blockingAgents
+}
+
+// noWordRegexp matches "no" as a standalone word (not as part of "not", "know", etc.).
+var noWordRegexp = regexp.MustCompile(`(?i)\bno\b`)
+
+// parseRestartResponse checks whether the agent indicated it is busy.
+// The question asks "would you be disrupted?", so:
+//   - "yes" -> agent IS busy -> return true (busy)
+//   - "no"  -> agent is NOT busy -> return false (not busy)
+//   - anything else -> conservative: return true (busy)
+func parseRestartResponse(resp *mcp.CreateMessageResult) bool {
+	if resp == nil {
+		return true
+	}
+	text := ""
+	if tc, ok := resp.Content.(mcp.TextContent); ok {
+		text = tc.Text
+	}
+	trimmed := strings.TrimSpace(text)
+	return !noWordRegexp.MatchString(trimmed)
 }
 
 // registerTools adds MCP tools for AI agent interaction.

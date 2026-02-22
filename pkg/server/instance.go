@@ -233,8 +233,14 @@ func (m *InstanceManager) monitorProcess(inst *ProjectInstance) {
 			exitCode = exitErr.ExitCode()
 		}
 		inst.Info.ExitCode = &exitCode
-		inst.Info.State = StateCrashed
-		log.Warn("Editor process exited with error", "project", inst.Info.ProjectName, "pid", inst.Info.PID, "error", err)
+		if oldState == StateStopping {
+			// Daemon requested this stop — non-zero exit from SIGTERM is expected
+			inst.Info.State = StateStopped
+			log.Info("Editor process stopped as requested", "project", inst.Info.ProjectName, "pid", inst.Info.PID, "exit_code", exitCode)
+		} else {
+			inst.Info.State = StateCrashed
+			log.Warn("Editor process exited unexpectedly", "project", inst.Info.ProjectName, "pid", inst.Info.PID, "error", err)
+		}
 	} else {
 		exitCode := 0
 		inst.Info.ExitCode = &exitCode

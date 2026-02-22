@@ -15,12 +15,14 @@ import (
 
 // BuildOrchestrator manages the build lifecycle with coalescing support.
 type BuildOrchestrator struct {
-	manager *InstanceManager
-	state   *StateStore
-	agents  *AgentRegistry
-	mu      sync.Mutex
-	building bool
-	queue   []RebuildRequest
+	manager         *InstanceManager
+	state           *StateStore
+	agents          *AgentRegistry
+	mcpServer       *mcpServerWrapper
+	restartApprover func(ctx context.Context) (bool, []string)
+	mu              sync.Mutex
+	building        bool
+	queue           []RebuildRequest
 }
 
 // NewBuildOrchestrator creates a new build orchestrator.
@@ -31,6 +33,14 @@ func NewBuildOrchestrator(manager *InstanceManager, state *StateStore, agents *A
 		agents:  agents,
 		queue:   []RebuildRequest{},
 	}
+}
+
+// SetMCPServer sets the MCP server reference for restart approval checks.
+func (b *BuildOrchestrator) SetMCPServer(s *mcpServerWrapper) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.mcpServer = s
+	b.restartApprover = s.RequestRestartApproval
 }
 
 // RequestRebuild queues a rebuild request. If no build is in progress, it starts immediately.
@@ -206,7 +216,33 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 }
 
 // executeFullRebuild stops the editor, builds, and restarts.
-func (b *BuildOrchestrator) executeFullRebuild(_ context.Context, record *BuildRecord) error {
+func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *BuildRecord) error {
+	// Step 0: Check with connected agents before stopping editor
+	if b.restartApprover != nil {
+		for {
+			approved, blockers := b.restartApprover(ctx)
+			if approved {
+				break
+			}
+			log.Info("Restart blocked by agents, retrying in 5s",
+				"build_id", record.ID, "blockers", blockers)
+			b.agents.Emit(AgentEvent{
+				Type:      "restart_blocked",
+				Timestamp: time.Now(),
+				Data: map[string]interface{}{
+					"build_id":        record.ID,
+					"blocking_agents": blockers,
+				},
+			})
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("build cancelled while waiting for agent approval")
+			case <-time.After(5 * time.Second):
+				// retry
+			}
+		}
+	}
+
 	// Step 1: Stop the editor
 	instances := b.manager.ListInstances()
 	for _, inst := range instances {
