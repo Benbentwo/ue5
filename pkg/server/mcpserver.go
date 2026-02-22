@@ -219,10 +219,7 @@ func parseRestartResponse(resp *mcp.CreateMessageResult) bool {
 		text = tc.Text
 	}
 	trimmed := strings.TrimSpace(text)
-	if noWordRegexp.MatchString(trimmed) {
-		return false
-	}
-	return true
+	return !noWordRegexp.MatchString(trimmed)
 }
 
 // registerTools adds MCP tools for AI agent interaction.
