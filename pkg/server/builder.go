@@ -20,6 +20,7 @@ type BuildOrchestrator struct {
 	agents          *AgentRegistry
 	mcpServer       *mcpServerWrapper
 	restartApprover func(ctx context.Context) (bool, []string)
+	buildRunner     func(record *BuildRecord) error // defaults to runBuild; overridable for testing
 	mu              sync.Mutex
 	building        bool
 	queue           []RebuildRequest
@@ -215,9 +216,20 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 	b.mu.Unlock()
 }
 
-// executeFullRebuild stops the editor, builds, and restarts.
+// executeFullRebuild builds first (editor stays running), then stops and restarts
+// only if the build succeeds. This keeps the editor available during compilation
+// and avoids unnecessary downtime on build failures.
 func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *BuildRecord) error {
-	// Step 0: Check with connected agents before stopping editor
+	// Step 1: Run the build while the editor stays running
+	buildFn := b.runBuild
+	if b.buildRunner != nil {
+		buildFn = b.buildRunner
+	}
+	if err := buildFn(record); err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	// Step 2: Build succeeded — check with connected agents before stopping editor
 	if b.restartApprover != nil {
 		for {
 			approved, blockers := b.restartApprover(ctx)
@@ -243,24 +255,19 @@ func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *Buil
 		}
 	}
 
-	// Step 1: Stop the editor
+	// Step 3: Stop the editor
 	instances := b.manager.ListInstances()
 	for _, inst := range instances {
 		if inst.ProjectPath == record.ProjectPath && (inst.State == StateRunning || inst.State == StateStarting) {
 			log.Info("Stopping editor for rebuild", "project", inst.ProjectName, "pid", inst.PID)
 			if _, err := b.manager.StopEditor(inst.ProjectPath, false); err != nil {
-				log.Warn("Failed to stop editor, continuing with build", "error", err)
+				log.Warn("Failed to stop editor, continuing with restart", "error", err)
 			}
 			break
 		}
 	}
 
-	// Step 2: Run the build
-	if err := b.runBuild(record); err != nil {
-		return fmt.Errorf("build failed: %w", err)
-	}
-
-	// Step 3: Restart the editor
+	// Step 4: Restart the editor
 	// Find the engine path from the last known instance, then fall back to .uproject manifest lookup
 	enginePath := ""
 	for _, inst := range instances {
