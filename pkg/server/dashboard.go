@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Benbentwo/ue5/pkg"
 	"github.com/charmbracelet/log"
 )
 
@@ -175,6 +176,27 @@ func (ds *dashboardServer) handleEditorStart(w http.ResponseWriter, r *http.Requ
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
+
+	// Auto-resolve engine_path if not provided
+	if req.EnginePath == "" {
+		for _, inst := range ds.manager.ListInstances() {
+			if inst.ProjectPath == req.ProjectPath {
+				req.EnginePath = inst.EnginePath
+				break
+			}
+		}
+	}
+	if req.EnginePath == "" {
+		uproject, err := pkg.NewUprojectE(req.ProjectPath)
+		if err == nil && uproject.EngineAssociation != "" {
+			req.EnginePath = pkg.GetEnginePath(uproject.EngineAssociation)
+		}
+	}
+	if req.EnginePath == "" {
+		http.Error(w, `{"error":"could not resolve engine path"}`, http.StatusBadRequest)
+		return
+	}
+
 	info, err := ds.manager.StartEditor(&req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
