@@ -100,6 +100,7 @@ func (d *Daemon) Run() error {
 
 	// Start MCP SSE server alongside Unix socket
 	d.mcpServer = newMCPServer(d)
+	d.builder.SetMCPServer(d.mcpServer)
 	go func() {
 		mcpAddr := MCPAddr()
 		if err := d.mcpServer.Start(mcpAddr); err != nil {
