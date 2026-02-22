@@ -266,6 +266,9 @@ func TestFullRebuildEmitsRestartBlocked(t *testing.T) {
 		mu.Unlock()
 	})
 
+	// Stub the build step so we can test the approval flow
+	b.buildRunner = func(record *BuildRecord) error { return nil }
+
 	callCount := 0
 	b.restartApprover = func(ctx context.Context) (bool, []string) {
 		callCount++
@@ -311,6 +314,9 @@ func TestFullRebuildCancelledDuringApprovalWait(t *testing.T) {
 	agents := NewAgentRegistry()
 	manager := NewInstanceManager()
 	b := NewBuildOrchestrator(manager, state, agents)
+
+	// Stub the build step so we can test the approval flow
+	b.buildRunner = func(record *BuildRecord) error { return nil }
 
 	// Always block
 	b.restartApprover = func(ctx context.Context) (bool, []string) {
