@@ -28,9 +28,23 @@ function stateLabel(state: InstanceInfo['state']): string {
   return state.charAt(0).toUpperCase() + state.slice(1)
 }
 
-function latestBuild(buildInfo: BuildInfo | null): BuildRecord | null {
-  if (buildInfo?.current_build) return buildInfo.current_build
-  if (buildInfo?.recent_builds?.length) return buildInfo.recent_builds[0]
+function latestBuild(
+  buildInfo: BuildInfo | null,
+  selectedProject: string | null,
+): BuildRecord | null {
+  if (buildInfo?.current_build) {
+    if (!selectedProject || buildInfo.current_build.project_path === selectedProject)
+      return buildInfo.current_build
+  }
+  if (buildInfo?.recent_builds?.length) {
+    if (selectedProject) {
+      const match = buildInfo.recent_builds.find(
+        (b) => b.project_path === selectedProject,
+      )
+      return match ?? null
+    }
+    return buildInfo.recent_builds[0]
+  }
   return null
 }
 
@@ -69,7 +83,7 @@ export default function InstancePanel({
     (i) => i.state === 'running' || i.state === 'starting',
   )
 
-  const build = latestBuild(buildInfo)
+  const build = latestBuild(buildInfo, selectedProject)
   const disabledReason = startDisabledReason(build)
 
   async function handleStart() {
