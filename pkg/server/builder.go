@@ -23,6 +23,8 @@ type BuildOrchestrator struct {
 	mu              sync.Mutex
 	building        bool
 	queue           []RebuildRequest
+	buildCapture    *LogCapture
+	buildCaptureMu  sync.RWMutex
 }
 
 // NewBuildOrchestrator creates a new build orchestrator.
@@ -341,4 +343,43 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 		record.ProjectPath,
 		logFile,
 	)
+}
+
+// setBuildCapture stores the active build's LogCapture.
+func (b *BuildOrchestrator) setBuildCapture(lc *LogCapture) {
+	b.buildCaptureMu.Lock()
+	defer b.buildCaptureMu.Unlock()
+	b.buildCapture = lc
+}
+
+// clearBuildCapture closes and removes the active build's LogCapture.
+func (b *BuildOrchestrator) clearBuildCapture() {
+	b.buildCaptureMu.Lock()
+	defer b.buildCaptureMu.Unlock()
+	if b.buildCapture != nil {
+		b.buildCapture.Close()
+		b.buildCapture = nil
+	}
+}
+
+// SubscribeBuildLogs returns a channel streaming live build log lines.
+// Returns an error if no build is currently active.
+func (b *BuildOrchestrator) SubscribeBuildLogs(filter *StreamLogsRequest) (<-chan LogLineEvent, error) {
+	b.buildCaptureMu.RLock()
+	defer b.buildCaptureMu.RUnlock()
+	if b.buildCapture == nil {
+		return nil, fmt.Errorf("no active build")
+	}
+	return b.buildCapture.Subscribe(filter), nil
+}
+
+// RecentBuildLines returns the last n lines from the active build's ring buffer.
+// Returns nil if no build is active.
+func (b *BuildOrchestrator) RecentBuildLines(n int) []LogLineEvent {
+	b.buildCaptureMu.RLock()
+	defer b.buildCaptureMu.RUnlock()
+	if b.buildCapture == nil {
+		return nil
+	}
+	return b.buildCapture.RecentLines(n)
 }
