@@ -346,6 +346,61 @@ func TestFullRebuildCancelledDuringApprovalWait(t *testing.T) {
 	}
 }
 
+func TestBuildCaptureSubscribe(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	// No active build — subscribe should return nil, error
+	_, err := b.SubscribeBuildLogs(&StreamLogsRequest{})
+	if err == nil {
+		t.Error("Expected error when no build is active")
+	}
+
+	// No active build — recent lines should return empty
+	lines := b.RecentBuildLines(100)
+	if len(lines) != 0 {
+		t.Errorf("Expected 0 recent lines, got %d", len(lines))
+	}
+}
+
+func TestBuildCaptureLifecycle(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	// Simulate setting a build capture
+	logPath := filepath.Join(t.TempDir(), "build.log")
+	capture, err := NewLogCapture(logPath)
+	if err != nil {
+		t.Fatalf("Failed to create LogCapture: %v", err)
+	}
+
+	b.setBuildCapture(capture)
+
+	// Should now be able to subscribe
+	ch, err := b.SubscribeBuildLogs(&StreamLogsRequest{})
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+	if ch == nil {
+		t.Fatal("Expected non-nil channel")
+	}
+
+	// Clear the capture
+	b.clearBuildCapture()
+
+	// Should error again
+	_, err = b.SubscribeBuildLogs(&StreamLogsRequest{})
+	if err == nil {
+		t.Error("Expected error after clearing build capture")
+	}
+}
+
 func TestHotReloadSkipsApprovalCheck(t *testing.T) {
 	state := NewStateStore()
 	state.path = filepath.Join(t.TempDir(), "state.json")
