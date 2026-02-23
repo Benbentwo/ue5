@@ -54,3 +54,11 @@ export interface DaemonStatus {
   agents: number
   building: boolean
 }
+
+export interface LogLineEvent {
+  timestamp: string
+  stream: string
+  raw: string
+  level: string
+  category: string
+}
