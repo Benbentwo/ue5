@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -308,15 +307,10 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 	}
 
 	logPath := BuildLogFile(record.ProjectPath)
-	logFile, err := os.Create(logPath)
-	if err != nil {
-		return fmt.Errorf("failed to create build log file: %w", err)
-	}
-	defer logFile.Close() //nolint:errcheck
 
 	log.Info("Running UBT build", "target", record.Target, "platform", record.Platform, "config", record.Configuration, "log", logPath)
 
-	// Resolve engine path: try active instances first, then fall back to .uproject manifest lookup
+	// Resolve engine path
 	enginePath := ""
 	instances := b.manager.ListInstances()
 	for _, inst := range instances {
@@ -335,14 +329,40 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 		return fmt.Errorf("cannot determine engine path for project: %s", record.ProjectPath)
 	}
 
-	return pkg.RunBuildScriptToWriter(
+	// Create LogCapture for build output streaming
+	capture, err := NewLogCapture(logPath)
+	if err != nil {
+		return fmt.Errorf("failed to create build log capture: %w", err)
+	}
+	b.setBuildCapture(capture)
+	defer b.clearBuildCapture()
+
+	// Get piped command
+	cmd, stdout, stderr, err := pkg.RunBuildScriptPiped(
 		enginePath,
 		record.Target,
 		record.Platform,
 		record.Configuration,
 		record.ProjectPath,
-		logFile,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to create build command: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start build: %w", err)
+	}
+
+	// Capture streams in background goroutines
+	go capture.CaptureStream(stdout, "stdout")
+	go capture.CaptureStream(stderr, "stderr")
+
+	// Wait for build to finish
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	return nil
 }
 
 // setBuildCapture stores the active build's LogCapture.
