@@ -132,6 +132,19 @@ func TestEditorStartResolvesEnginePath(t *testing.T) {
 	// If we get here, resolution somehow succeeded (unlikely with a fake path) — that's also fine
 }
 
+func TestBuildLogStreamNoBuild(t *testing.T) {
+	ds := newTestDashboard()
+	mux := ds.routes()
+
+	req := httptest.NewRequest("GET", "/api/build/logs/stream?project=/test/P.uproject", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected 204 when no build active, got %d", w.Code)
+	}
+}
+
 func TestDashboardCORSHeaders(t *testing.T) {
 	ds := newTestDashboard()
 	mux := ds.routes()
