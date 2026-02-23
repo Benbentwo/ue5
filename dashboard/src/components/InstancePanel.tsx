@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { InstanceInfo, BuildInfo, BuildRecord } from '../types'
 import { postAPI } from '../hooks/useAPI'
+import BuildLogViewer from './BuildLogViewer'
+import { useBuildLogStream } from '../hooks/useBuildLogStream'
 
 interface InstancePanelProps {
   instances: InstanceInfo[]
@@ -61,6 +63,56 @@ function startDisabledReason(build: BuildRecord | null): string | null {
   }
 }
 
+function InstanceCard({
+  inst,
+  onStop,
+  buildInfo,
+}: {
+  inst: InstanceInfo
+  onStop: (pid: number) => void
+  buildInfo: BuildInfo | null
+}) {
+  const buildActive =
+    buildInfo?.current_build != null &&
+    (buildInfo.current_build.status === 'building' ||
+      buildInfo.current_build.status === 'pending') &&
+    buildInfo.current_build.project_path === inst.project_path
+
+  const { lines } = useBuildLogStream(
+    inst.project_path,
+    buildActive,
+  )
+
+  return (
+    <li className="rounded-lg bg-gray-900 p-4 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span
+            className={`inline-flex h-2.5 w-2.5 rounded-full ${stateColor(inst.state)}`}
+          />
+          <span className="font-medium text-gray-200">
+            {inst.project_name}
+          </span>
+        </div>
+        {(inst.state === 'running' || inst.state === 'starting') && (
+          <button
+            onClick={() => onStop(inst.pid)}
+            className="rounded bg-gray-800 px-2 py-1 text-xs text-red-400 hover:bg-gray-700 transition-colors"
+          >
+            Stop
+          </button>
+        )}
+      </div>
+      <div className="text-sm text-gray-400 space-y-0.5">
+        <p>State: {stateLabel(inst.state)}</p>
+        <p>PID: {inst.pid}</p>
+        <p>Engine: {inst.engine_version}</p>
+      </div>
+      {buildActive && <BuildLogViewer lines={lines} />}
+    </li>
+  )
+}
+
 export default function InstancePanel({
   instances,
   onAction,
@@ -111,34 +163,12 @@ export default function InstancePanel({
       {instances.length > 0 ? (
         <ul className="flex flex-col gap-2">
           {instances.map((inst) => (
-            <li
+            <InstanceCard
               key={inst.pid}
-              className="rounded-lg bg-gray-900 p-4 flex flex-col gap-2"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`inline-flex h-2.5 w-2.5 rounded-full ${stateColor(inst.state)}`}
-                  />
-                  <span className="font-medium text-gray-200">
-                    {inst.project_name}
-                  </span>
-                </div>
-                {(inst.state === 'running' || inst.state === 'starting') && (
-                  <button
-                    onClick={() => handleStop(inst.pid)}
-                    className="rounded bg-gray-800 px-2 py-1 text-xs text-red-400 hover:bg-gray-700 transition-colors"
-                  >
-                    Stop
-                  </button>
-                )}
-              </div>
-              <div className="text-sm text-gray-400 space-y-0.5">
-                <p>State: {stateLabel(inst.state)}</p>
-                <p>PID: {inst.pid}</p>
-                <p>Engine: {inst.engine_version}</p>
-              </div>
-            </li>
+              inst={inst}
+              onStop={handleStop}
+              buildInfo={buildInfo}
+            />
           ))}
         </ul>
       ) : (
