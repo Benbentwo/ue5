@@ -149,6 +149,30 @@ type BuildInfoResponse struct {
 	RecentBuilds        []BuildRecord `json:"recent_builds"`
 }
 
+// BuildSummary is a compact representation of a BuildRecord for MCP responses.
+// Strips ProjectPath, Features, Contributions, CompletedAt, Target, Platform,
+// Configuration — fields agents rarely branch on, keeping list responses small.
+type BuildSummary struct {
+	ID        string      `json:"id"`
+	Status    BuildStatus `json:"status"`
+	Labels    []string    `json:"labels"`
+	Mode      BuildMode   `json:"mode"`
+	StartedAt time.Time   `json:"started_at"`
+	Error     string      `json:"error,omitempty"`
+}
+
+// NewBuildSummary creates a compact summary from a full BuildRecord.
+func NewBuildSummary(r BuildRecord) BuildSummary {
+	return BuildSummary{
+		ID:        r.ID,
+		Status:    r.Status,
+		Labels:    r.Labels,
+		Mode:      r.Mode,
+		StartedAt: r.StartedAt,
+		Error:     r.Error,
+	}
+}
+
 // BuildStatusResponse is the minimal polling response.
 //
 // Three fields, by design:
@@ -160,7 +184,8 @@ type BuildInfoResponse struct {
 //     polling loop needs to branch on.
 //
 // When no build has ever run, all fields are zero-valued and the agent can
-// detect "no build yet" via ID == "".
+// detect "no build yet" via ID == "". Even smaller than BuildSummary on
+// purpose — this is the polling-hot path.
 type BuildStatusResponse struct {
 	ID     string      `json:"id"`
 	Prompt string      `json:"prompt"`
@@ -168,10 +193,11 @@ type BuildStatusResponse struct {
 }
 
 // BuildHistoryResponse is returned for get_build_history requests (opt-in).
+// Uses BuildSummary to keep each record compact even when returning many.
 type BuildHistoryResponse struct {
-	Builds              []BuildRecord `json:"builds"`
-	AccumulatedFeatures []string      `json:"accumulated_features"`
-	TotalBuilds         int           `json:"total_builds"`
+	Builds              []BuildSummary `json:"builds"`
+	AccumulatedFeatures []string       `json:"accumulated_features"`
+	TotalBuilds         int            `json:"total_builds"`
 }
 
 // BuildFailureResponse is returned for get_build_failure requests.

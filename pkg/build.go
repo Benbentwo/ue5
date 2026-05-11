@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,30 @@ func RunBuildScriptToWriter(enginePath, target, platform, state, projectPath str
 	cmd.Stdout = output
 	cmd.Stderr = output
 	return cmd.Run()
+}
+
+// RunBuildScriptPiped prepares a build command with piped stdout/stderr.
+// The caller is responsible for calling cmd.Start(), reading from the pipes,
+// and calling cmd.Wait().
+func RunBuildScriptPiped(enginePath, target, platform, state, projectPath string) (cmd *exec.Cmd, stdout io.ReadCloser, stderr io.ReadCloser, err error) {
+	osPath := OsStringSliceSwitcher(WindowsBuildScript, UnixBuildScript, UnixBuildScript)
+	basePath := []string{enginePath}
+	pathElements := append(basePath, osPath...)
+	buildScript := filepath.Join(pathElements...)
+
+	cmd = exec.Command(buildScript, target, platform, state, projectPath)
+
+	stdout, err = cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	stderr, err = cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	return cmd, stdout, stderr, nil
 }
 
 // EditorBinaryPath returns the full path to the Unreal Editor binary for the given engine installation.

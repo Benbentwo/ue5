@@ -168,6 +168,11 @@ Always check server status before and after operations:
 ue5 server status --json
 ```
 
+When starting the editor, wait on daemon state instead of sleeping:
+```bash
+ue5 server run --wait --timeout 120s --json
+```
+
 **Output Format:**
 
 After each operation, report:
@@ -183,6 +188,7 @@ After each operation, report:
 - Use `get_build_info` (MCP) or `ue5 server build-info --json` to check what's built before rebuilding
 - Use `list_instances` (MCP) or `ue5 server status --json` to check editor state before operations
 - Use `start_editor` (MCP) or `ue5 server run` to launch the editor — pass cwd as `project_path` when in doubt
+- Never use blind `sleep` to wait for startup; use `ue5 server run --wait`, poll `ue5 server status --json`, or call `list_instances` (MCP) until `state == "running"`
 - A failed `full`-mode rebuild leaves the editor stopped; investigate via `get_build_failure` before restarting
 - Prefer MCP tools over CLI when both are available — fewer tokens, structured responses
 - For polling, ALWAYS use `get_build_status` (not `get_build_info`) to keep token cost flat

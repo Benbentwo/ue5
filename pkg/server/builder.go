@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,12 +14,17 @@ import (
 
 // BuildOrchestrator manages the build lifecycle with coalescing support.
 type BuildOrchestrator struct {
-	manager *InstanceManager
-	state   *StateStore
-	agents  *AgentRegistry
-	mu      sync.Mutex
-	building bool
-	queue   []RebuildRequest
+	manager         *InstanceManager
+	state           *StateStore
+	agents          *AgentRegistry
+	mcpServer       *mcpServerWrapper
+	restartApprover func(ctx context.Context) (bool, []string)
+	buildRunner     func(record *BuildRecord) error // defaults to runBuild; overridable for testing
+	mu              sync.Mutex
+	building        bool
+	queue           []RebuildRequest
+	buildCapture    *LogCapture
+	buildCaptureMu  sync.RWMutex
 }
 
 // NewBuildOrchestrator creates a new build orchestrator.
@@ -31,6 +35,14 @@ func NewBuildOrchestrator(manager *InstanceManager, state *StateStore, agents *A
 		agents:  agents,
 		queue:   []RebuildRequest{},
 	}
+}
+
+// SetMCPServer sets the MCP server reference for restart approval checks.
+func (b *BuildOrchestrator) SetMCPServer(s *mcpServerWrapper) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.mcpServer = s
+	b.restartApprover = s.RequestRestartApproval
 }
 
 // RequestRebuild queues a rebuild request. If no build is in progress, it starts immediately.
@@ -205,26 +217,58 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 	b.mu.Unlock()
 }
 
-// executeFullRebuild stops the editor, builds, and restarts.
-func (b *BuildOrchestrator) executeFullRebuild(_ context.Context, record *BuildRecord) error {
-	// Step 1: Stop the editor
+// executeFullRebuild builds first (editor stays running), then stops and restarts
+// only if the build succeeds. This keeps the editor available during compilation
+// and avoids unnecessary downtime on build failures.
+func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *BuildRecord) error {
+	// Step 1: Run the build while the editor stays running
+	buildFn := b.runBuild
+	if b.buildRunner != nil {
+		buildFn = b.buildRunner
+	}
+	if err := buildFn(record); err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	// Step 2: Build succeeded — check with connected agents before stopping editor
+	if b.restartApprover != nil {
+		for {
+			approved, blockers := b.restartApprover(ctx)
+			if approved {
+				break
+			}
+			log.Info("Restart blocked by agents, retrying in 5s",
+				"build_id", record.ID, "blockers", blockers)
+			b.agents.Emit(AgentEvent{
+				Type:      "restart_blocked",
+				Timestamp: time.Now(),
+				Data: map[string]interface{}{
+					"build_id":        record.ID,
+					"blocking_agents": blockers,
+				},
+			})
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("build cancelled while waiting for agent approval")
+			case <-time.After(5 * time.Second):
+				// retry
+			}
+		}
+	}
+
+	// Step 3: Stop the editor
 	instances := b.manager.ListInstances()
 	for _, inst := range instances {
 		if inst.ProjectPath == record.ProjectPath && (inst.State == StateRunning || inst.State == StateStarting) {
 			log.Info("Stopping editor for rebuild", "project", inst.ProjectName, "pid", inst.PID)
 			if _, err := b.manager.StopEditor(inst.ProjectPath, false); err != nil {
-				log.Warn("Failed to stop editor, continuing with build", "error", err)
+				log.Warn("Failed to stop editor, continuing with restart", "error", err)
 			}
 			break
 		}
 	}
 
-	// Step 2: Run the build
-	if err := b.runBuild(record); err != nil {
-		return fmt.Errorf("build failed: %w", err)
-	}
-
-	// Step 3: Restart the editor
+	// Step 4: Restart the editor
 	// Find the engine path from the last known instance, then fall back to .uproject manifest lookup
 	enginePath := ""
 	for _, inst := range instances {
@@ -270,15 +314,10 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 	}
 
 	logPath := BuildLogFile(record.ProjectPath)
-	logFile, err := os.Create(logPath)
-	if err != nil {
-		return fmt.Errorf("failed to create build log file: %w", err)
-	}
-	defer logFile.Close() //nolint:errcheck
 
 	log.Info("Running UBT build", "target", record.Target, "platform", record.Platform, "config", record.Configuration, "log", logPath)
 
-	// Resolve engine path: try active instances first, then fall back to .uproject manifest lookup
+	// Resolve engine path
 	enginePath := ""
 	instances := b.manager.ListInstances()
 	for _, inst := range instances {
@@ -297,12 +336,77 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 		return fmt.Errorf("cannot determine engine path for project: %s", record.ProjectPath)
 	}
 
-	return pkg.RunBuildScriptToWriter(
+	// Create LogCapture for build output streaming
+	capture, err := NewLogCapture(logPath)
+	if err != nil {
+		return fmt.Errorf("failed to create build log capture: %w", err)
+	}
+	b.setBuildCapture(capture)
+	defer b.clearBuildCapture()
+
+	// Get piped command
+	cmd, stdout, stderr, err := pkg.RunBuildScriptPiped(
 		enginePath,
 		record.Target,
 		record.Platform,
 		record.Configuration,
 		record.ProjectPath,
-		logFile,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to create build command: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start build: %w", err)
+	}
+
+	// Capture streams in background goroutines
+	go capture.CaptureStream(stdout, "stdout")
+	go capture.CaptureStream(stderr, "stderr")
+
+	// Wait for build to finish
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	return nil
+}
+
+// setBuildCapture stores the active build's LogCapture.
+func (b *BuildOrchestrator) setBuildCapture(lc *LogCapture) {
+	b.buildCaptureMu.Lock()
+	defer b.buildCaptureMu.Unlock()
+	b.buildCapture = lc
+}
+
+// clearBuildCapture closes and removes the active build's LogCapture.
+func (b *BuildOrchestrator) clearBuildCapture() {
+	b.buildCaptureMu.Lock()
+	defer b.buildCaptureMu.Unlock()
+	if b.buildCapture != nil {
+		b.buildCapture.Close()
+		b.buildCapture = nil
+	}
+}
+
+// SubscribeBuildLogs returns a channel streaming live build log lines.
+// Returns an error if no build is currently active.
+func (b *BuildOrchestrator) SubscribeBuildLogs(filter *StreamLogsRequest) (<-chan LogLineEvent, error) {
+	b.buildCaptureMu.RLock()
+	defer b.buildCaptureMu.RUnlock()
+	if b.buildCapture == nil {
+		return nil, fmt.Errorf("no active build")
+	}
+	return b.buildCapture.Subscribe(filter), nil
+}
+
+// RecentBuildLines returns the last n lines from the active build's ring buffer.
+// Returns nil if no build is active.
+func (b *BuildOrchestrator) RecentBuildLines(n int) []LogLineEvent {
+	b.buildCaptureMu.RLock()
+	defer b.buildCaptureMu.RUnlock()
+	if b.buildCapture == nil {
+		return nil
+	}
+	return b.buildCapture.RecentLines(n)
 }

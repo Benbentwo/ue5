@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Benbentwo/ue5/pkg"
 	"github.com/charmbracelet/log"
 )
 
@@ -93,6 +94,7 @@ func (ds *dashboardServer) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/editor/start", cors(ds.handleEditorStart))
 	mux.HandleFunc("POST /api/editor/stop", cors(ds.handleEditorStop))
 	mux.HandleFunc("GET /api/events", cors(ds.handleSSE))
+	mux.HandleFunc("GET /api/build/logs/stream", cors(ds.handleBuildLogStream))
 
 	// Serve embedded static files (production) or nothing (dev — use Vite)
 	if hasDashboardStatic() {
@@ -175,6 +177,27 @@ func (ds *dashboardServer) handleEditorStart(w http.ResponseWriter, r *http.Requ
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
+
+	// Auto-resolve engine_path if not provided
+	if req.EnginePath == "" {
+		for _, inst := range ds.manager.ListInstances() {
+			if inst.ProjectPath == req.ProjectPath {
+				req.EnginePath = inst.EnginePath
+				break
+			}
+		}
+	}
+	if req.EnginePath == "" {
+		uproject, err := pkg.NewUprojectE(req.ProjectPath)
+		if err == nil && uproject.EngineAssociation != "" {
+			req.EnginePath = pkg.GetEnginePath(uproject.EngineAssociation)
+		}
+	}
+	if req.EnginePath == "" {
+		http.Error(w, `{"error":"could not resolve engine path"}`, http.StatusBadRequest)
+		return
+	}
+
 	info, err := ds.manager.StartEditor(&req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
@@ -235,6 +258,67 @@ func (ds *dashboardServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		case event := <-ch:
 			ds.sendSSEEvent(w, flusher, event.Type, event.Data)
+		}
+	}
+}
+
+func (ds *dashboardServer) handleBuildLogStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	project := r.URL.Query().Get("project")
+	if project == "" {
+		http.Error(w, `{"error":"project query parameter required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Send history from ring buffer
+	history := ds.builder.RecentBuildLines(500)
+
+	// Subscribe to live stream
+	ch, err := ds.builder.SubscribeBuildLogs(&StreamLogsRequest{ProjectPath: project})
+	if err != nil {
+		// No active build
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// Send history as initial batch
+	if len(history) > 0 {
+		ds.sendSSEEvent(w, flusher, "build_log_history", map[string]interface{}{
+			"lines": history,
+		})
+	}
+
+	// Stream live lines
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case line, ok := <-ch:
+			if !ok {
+				// Channel closed — build ended
+				current := ds.state.GetCurrentBuild()
+				status := "unknown"
+				buildID := ""
+				if current != nil {
+					status = string(current.Status)
+					buildID = current.ID
+				}
+				ds.sendSSEEvent(w, flusher, "build_log_end", map[string]interface{}{
+					"build_id": buildID,
+					"status":   status,
+				})
+				return
+			}
+			ds.sendSSEEvent(w, flusher, "build_log", line)
 		}
 	}
 }

@@ -3,7 +3,10 @@ package server
 import (
 	"context"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestCoalescingRecordCreation(t *testing.T) {
@@ -225,5 +228,201 @@ func TestIsBuildingFlag(t *testing.T) {
 
 	if b.IsBuilding() {
 		t.Error("Should not be building initially")
+	}
+}
+
+func TestSetMCPServer(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	if b.mcpServer != nil {
+		t.Error("mcpServer should be nil initially")
+	}
+
+	d := &Daemon{version: "test"}
+	w := newMCPServer(d)
+	b.SetMCPServer(w)
+
+	if b.mcpServer == nil {
+		t.Error("mcpServer should be set after SetMCPServer")
+	}
+}
+
+func TestFullRebuildEmitsRestartBlocked(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	var events []AgentEvent
+	var mu sync.Mutex
+	agents.SetEventCallback(func(event AgentEvent) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	})
+
+	// Stub the build step so we can test the approval flow
+	b.buildRunner = func(record *BuildRecord) error { return nil }
+
+	callCount := 0
+	b.restartApprover = func(ctx context.Context) (bool, []string) {
+		callCount++
+		if callCount == 1 {
+			return false, []string{"session-1"}
+		}
+		return true, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	record := &BuildRecord{
+		ID:          "test-build",
+		ProjectPath: "/fake/project.uproject",
+		Mode:        BuildModeFull,
+	}
+
+	_ = b.executeFullRebuild(ctx, record)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	foundBlocked := false
+	for _, e := range events {
+		if e.Type == "restart_blocked" {
+			foundBlocked = true
+			break
+		}
+	}
+	if !foundBlocked {
+		t.Error("Expected 'restart_blocked' event to be emitted")
+	}
+
+	if callCount < 2 {
+		t.Errorf("Expected approver to be called at least twice, got %d", callCount)
+	}
+}
+
+func TestFullRebuildCancelledDuringApprovalWait(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	// Stub the build step so we can test the approval flow
+	b.buildRunner = func(record *BuildRecord) error { return nil }
+
+	// Always block
+	b.restartApprover = func(ctx context.Context) (bool, []string) {
+		return false, []string{"session-1"}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel after a short delay
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	record := &BuildRecord{
+		ID:          "test-cancel",
+		ProjectPath: "/fake/project.uproject",
+		Mode:        BuildModeFull,
+	}
+
+	err := b.executeFullRebuild(ctx, record)
+	if err == nil {
+		t.Error("Expected error when context is cancelled")
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("Expected cancellation error, got: %v", err)
+	}
+}
+
+func TestBuildCaptureSubscribe(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	// No active build — subscribe should return nil, error
+	_, err := b.SubscribeBuildLogs(&StreamLogsRequest{})
+	if err == nil {
+		t.Error("Expected error when no build is active")
+	}
+
+	// No active build — recent lines should return empty
+	lines := b.RecentBuildLines(100)
+	if len(lines) != 0 {
+		t.Errorf("Expected 0 recent lines, got %d", len(lines))
+	}
+}
+
+func TestBuildCaptureLifecycle(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	// Simulate setting a build capture
+	logPath := filepath.Join(t.TempDir(), "build.log")
+	capture, err := NewLogCapture(logPath)
+	if err != nil {
+		t.Fatalf("Failed to create LogCapture: %v", err)
+	}
+
+	b.setBuildCapture(capture)
+
+	// Should now be able to subscribe
+	ch, err := b.SubscribeBuildLogs(&StreamLogsRequest{})
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+	if ch == nil {
+		t.Fatal("Expected non-nil channel")
+	}
+
+	// Clear the capture
+	b.clearBuildCapture()
+
+	// Should error again
+	_, err = b.SubscribeBuildLogs(&StreamLogsRequest{})
+	if err == nil {
+		t.Error("Expected error after clearing build capture")
+	}
+}
+
+func TestHotReloadSkipsApprovalCheck(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	approverCalled := false
+	b.restartApprover = func(ctx context.Context) (bool, []string) {
+		approverCalled = true
+		return false, []string{"session-1"}
+	}
+
+	record := &BuildRecord{
+		ID:          "test-hotreload",
+		ProjectPath: "/fake/project.uproject",
+		Mode:        BuildModeHotReload,
+	}
+
+	_ = b.executeHotReload(context.Background(), record)
+
+	if approverCalled {
+		t.Error("Approval check should NOT be called for hot reload")
 	}
 }

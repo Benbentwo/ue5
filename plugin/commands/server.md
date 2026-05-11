@@ -28,7 +28,7 @@ ue5 server status --json
 
 ### Start an editor instance
 ```bash
-ue5 server run
+ue5 server run --wait --timeout 120s --json
 ```
 
 ### Stop an editor instance
@@ -66,7 +66,8 @@ ue5 server agents --json
 ## Important Notes
 
 - The daemon auto-starts when using `ue5 server run`, `ue5 server logs`, or `ue5 server rebuild`
-- Use `--json` flag on `status`, `build-info`, and `agents` for machine-readable output
+- Use `--json` flag on `run`, `status`, `build-info`, and `agents` for machine-readable output
+- Avoid blind startup `sleep`; use `ue5 server run --wait` or poll `ue5 server status --json`
 - The daemon manages editor lifecycle, log capture, build orchestration, and agent tracking
 - State is stored in `~/.ue5/` (socket, PID file, logs, state.json)
 - Logs are stored per-project in `~/.ue5/logs/<hash>/editor.log`

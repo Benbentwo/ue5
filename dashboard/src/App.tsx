@@ -119,7 +119,12 @@ function App() {
           selectedProject={selectedProject}
           onBuildTriggered={refetchBuild}
         />
-        <InstancePanel instances={filteredInstances} onAction={refetchInstances} />
+        <InstancePanel
+          instances={filteredInstances}
+          onAction={refetchInstances}
+          buildInfo={buildInfo}
+          selectedProject={selectedProject}
+        />
         <AgentPanel agents={agents ?? []} />
       </main>
     </div>
