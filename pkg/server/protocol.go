@@ -138,7 +138,10 @@ type UnregisterAgentRequest struct {
 	ID string `json:"id"`
 }
 
-// BuildInfoResponse is returned for get_build_info requests.
+// BuildInfoResponse is the rich response returned over the daemon socket
+// protocol (CLI consumption). The MCP server composes a slimmer response
+// inline — see mcpserver.go handleGetBuildInfo for the agent-facing shape,
+// which trims AccumulatedFeatures and RecentBuilds to keep polling cheap.
 type BuildInfoResponse struct {
 	CurrentBuild        *BuildRecord  `json:"current_build,omitempty"`
 	AccumulatedFeatures []string      `json:"accumulated_features"`
@@ -147,6 +150,8 @@ type BuildInfoResponse struct {
 }
 
 // BuildSummary is a compact representation of a BuildRecord for MCP responses.
+// Strips ProjectPath, Features, Contributions, CompletedAt, Target, Platform,
+// Configuration — fields agents rarely branch on, keeping list responses small.
 type BuildSummary struct {
 	ID        string      `json:"id"`
 	Status    BuildStatus `json:"status"`
@@ -168,12 +173,39 @@ func NewBuildSummary(r BuildRecord) BuildSummary {
 	}
 }
 
-// CompactBuildInfoResponse is a smaller build info payload for MCP tool responses.
-type CompactBuildInfoResponse struct {
-	CurrentBuild        *BuildSummary  `json:"current_build,omitempty"`
+// BuildStatusResponse is the minimal polling response.
+//
+// Three fields, by design:
+//   - ID: handle the agent uses to query failure details via get_build_failure
+//   - Prompt: the human-readable label(s) supplied at rebuild time, joined for
+//     coalesced builds (e.g. "Added jump + Fixed damage"). Lets agents tell
+//     "is my work in this build?" without paging through Labels/Contributions.
+//   - Status: succeeded / failed / building / pending — the only thing a
+//     polling loop needs to branch on.
+//
+// When no build has ever run, all fields are zero-valued and the agent can
+// detect "no build yet" via ID == "". Even smaller than BuildSummary on
+// purpose — this is the polling-hot path.
+type BuildStatusResponse struct {
+	ID     string      `json:"id"`
+	Prompt string      `json:"prompt"`
+	Status BuildStatus `json:"status"`
+}
+
+// BuildHistoryResponse is returned for get_build_history requests (opt-in).
+// Uses BuildSummary to keep each record compact even when returning many.
+type BuildHistoryResponse struct {
+	Builds              []BuildSummary `json:"builds"`
 	AccumulatedFeatures []string       `json:"accumulated_features"`
 	TotalBuilds         int            `json:"total_builds"`
-	RecentBuilds        []BuildSummary `json:"recent_builds"`
+}
+
+// BuildFailureResponse is returned for get_build_failure requests.
+type BuildFailureResponse struct {
+	BuildID    string   `json:"build_id"`
+	Error      string   `json:"error,omitempty"`
+	ErrorLines []string `json:"error_lines"`
+	LogPath    string   `json:"log_path"`
 }
 
 // Response is the envelope for all server-to-client messages.

@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Benbentwo/ue5/pkg"
 	"github.com/charmbracelet/log"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -274,13 +277,95 @@ func (w *mcpServerWrapper) registerTools() {
 		w.handleUnregisterAgent,
 	)
 
-	// Tool: get_build_info
+	// Tool: get_build_status — minimal polling response.
+	// Use this when waiting on a rebuild. Returns ID + prompt + status only.
+	// If status == "failed", call get_build_failure with the ID for details.
+	w.mcp.AddTool(
+		mcp.NewTool("get_build_status",
+			mcp.WithDescription("Minimal status check for the current build. "+
+				"Returns only {id, prompt, status} — designed for cheap polling. "+
+				"If status is 'failed', call get_build_failure with the id to fetch error details. "+
+				"Returns empty id when no build has ever run."),
+		),
+		w.handleGetBuildStatus,
+	)
+
+	// Tool: get_build_info — slim default for "is my work in the queue?".
+	// Returns the current build (with labels/contributions for verifying coalesced
+	// work) plus counts. Drops accumulated_features and recent_builds — those
+	// live behind get_build_history.
 	w.mcp.AddTool(
 		mcp.NewTool("get_build_info",
-			mcp.WithDescription("Get current build metadata, feature history, and recent build records. "+
-				"Use this to determine if a rebuild is needed based on accumulated features."),
+			mcp.WithDescription("Get the current build with its labels and contributions, "+
+				"plus aggregate counts. Use this to verify your rebuild label landed in a "+
+				"coalesced build. For full history, call get_build_history. For polling, "+
+				"call get_build_status (cheaper)."),
 		),
 		w.handleGetBuildInfo,
+	)
+
+	// Tool: get_build_history — opt-in audit trail.
+	w.mcp.AddTool(
+		mcp.NewTool("get_build_history",
+			mcp.WithDescription("Full build history and accumulated features across all builds. "+
+				"Opt-in because the response grows with project lifetime — use sparingly. "+
+				"Prefer get_build_info for typical 'what's the state?' queries."),
+			mcp.WithNumber("limit",
+				mcp.Description("Max number of recent builds to return (default 10, max 50)")),
+		),
+		w.handleGetBuildHistory,
+	)
+
+	// Tool: get_build_failure — read error lines from build.log on disk.
+	w.mcp.AddTool(
+		mcp.NewTool("get_build_failure",
+			mcp.WithDescription("Fetch error details for a failed build by ID. "+
+				"Reads ~/.ue5/logs/<hash>/build.log and extracts lines containing "+
+				"'error:' / 'Error:' / 'Fatal error:' with surrounding context. "+
+				"Bounded response — safe to call after get_build_status reports failed."),
+			mcp.WithString("build_id",
+				mcp.Description("Build ID to fetch failure for. Defaults to the current build.")),
+		),
+		w.handleGetBuildFailure,
+	)
+
+	// Tool: start_editor — launch the UE5 Editor for a project via the daemon.
+	w.mcp.AddTool(
+		mcp.NewTool("start_editor",
+			mcp.WithDescription("Start the Unreal Engine editor for a project. "+
+				"The daemon manages the process and captures all logs. "+
+				"If project_path is omitted, pass your current working directory — "+
+				"the daemon walks up the directory tree to find a .uproject file. "+
+				"engine_path is auto-resolved from the .uproject's EngineAssociation if omitted."),
+			mcp.WithString("project_path",
+				mcp.Description("Path to the .uproject file, OR a directory under the project. "+
+					"Defaults to caller's cwd if omitted (must be passed by the agent).")),
+			mcp.WithString("engine_path",
+				mcp.Description("Path to the Unreal Engine installation. Auto-resolved if omitted.")),
+		),
+		w.handleStartEditor,
+	)
+
+	// Tool: stop_editor — stop a managed editor instance.
+	w.mcp.AddTool(
+		mcp.NewTool("stop_editor",
+			mcp.WithDescription("Stop the running editor for a project. "+
+				"Use force=true to send SIGKILL instead of a graceful shutdown."),
+			mcp.WithString("project_path", mcp.Required(),
+				mcp.Description("Absolute path to the .uproject file (must match a running instance)")),
+			mcp.WithBoolean("force",
+				mcp.Description("Force-kill instead of graceful shutdown (default false)")),
+		),
+		w.handleStopEditor,
+	)
+
+	// Tool: list_instances — list managed editor instances.
+	w.mcp.AddTool(
+		mcp.NewTool("list_instances",
+			mcp.WithDescription("List all editor instances managed by the daemon, including "+
+				"PID, state (starting/running/stopping/stopped/crashed), and log file path."),
+		),
+		w.handleListInstances,
 	)
 }
 
@@ -373,30 +458,266 @@ func (w *mcpServerWrapper) handleUnregisterAgent(ctx context.Context, req mcp.Ca
 	return mcp.NewToolResultText(fmt.Sprintf(`{"unregistered":"%s"}`, id)), nil
 }
 
+// slimBuildInfo is the agent-facing shape of get_build_info — trimmed from
+// the rich socket-protocol BuildInfoResponse to keep typical polls cheap.
+// CurrentBuild uses BuildSummary (not BuildRecord) so the Labels needed to
+// verify "did my work land in this build?" are present, but project-path,
+// platform, target, and other rarely-used fields are not.
+type slimBuildInfo struct {
+	CurrentBuild *BuildSummary `json:"current_build,omitempty"`
+	TotalBuilds  int           `json:"total_builds"`
+	FeatureCount int           `json:"feature_count"`
+}
+
 func (w *mcpServerWrapper) handleGetBuildInfo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	current := w.daemon.state.GetCurrentBuild()
-	recent := w.daemon.state.GetBuildHistory(3)
-
 	var currentSummary *BuildSummary
 	if current != nil {
 		s := NewBuildSummary(*current)
 		currentSummary = &s
 	}
-
-	recentSummaries := make([]BuildSummary, len(recent))
-	for i, r := range recent {
-		recentSummaries[i] = NewBuildSummary(r)
-	}
-
-	info := &CompactBuildInfoResponse{
-		CurrentBuild:        currentSummary,
-		AccumulatedFeatures: w.daemon.state.GetAccumulatedFeatures(),
-		TotalBuilds:         len(w.daemon.state.GetState().BuildHistory),
-		RecentBuilds:        recentSummaries,
+	info := slimBuildInfo{
+		CurrentBuild: currentSummary,
+		TotalBuilds:  len(w.daemon.state.GetState().BuildHistory),
+		FeatureCount: len(w.daemon.state.GetAccumulatedFeatures()),
 	}
 
 	data, _ := json.MarshalIndent(info, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+// handleGetBuildStatus returns the minimal {id, prompt, status} polling shape.
+// Joins coalesced labels with " + " so the prompt reads naturally.
+func (w *mcpServerWrapper) handleGetBuildStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	current := w.daemon.state.GetCurrentBuild()
+	resp := BuildStatusResponse{}
+	if current != nil {
+		resp.ID = current.ID
+		resp.Status = current.Status
+		resp.Prompt = strings.Join(current.Labels, " + ")
+	}
+	data, _ := json.Marshal(resp) // no indent — every byte counts on this path
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// handleGetBuildHistory returns the full audit trail. Capped at 50 to bound
+// the response even when an agent passes a large limit.
+func (w *mcpServerWrapper) handleGetBuildHistory(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	limit := req.GetInt("limit", 10)
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	history := w.daemon.state.GetBuildHistory(limit)
+	summaries := make([]BuildSummary, len(history))
+	for i, r := range history {
+		summaries[i] = NewBuildSummary(r)
+	}
+	resp := BuildHistoryResponse{
+		Builds:              summaries,
+		AccumulatedFeatures: w.daemon.state.GetAccumulatedFeatures(),
+		TotalBuilds:         len(w.daemon.state.GetState().BuildHistory),
+	}
+	data, _ := json.MarshalIndent(resp, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// handleGetBuildFailure extracts error context from the build log on disk.
+// Returns up to maxErrorLines lines, each error line plus ±contextLines around
+// it, deduplicated. Bounded response even on multi-thousand-line build logs.
+func (w *mcpServerWrapper) handleGetBuildFailure(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	buildID := req.GetString("build_id", "")
+
+	// Locate the target build record.
+	var target *BuildRecord
+	if buildID == "" {
+		target = w.daemon.state.GetCurrentBuild()
+	} else {
+		for _, b := range w.daemon.state.GetState().BuildHistory {
+			if b.ID == buildID {
+				rec := b
+				target = &rec
+				break
+			}
+		}
+	}
+	if target == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("no build found with id %q", buildID)), nil
+	}
+
+	logPath := BuildLogFile(target.ProjectPath)
+	resp := BuildFailureResponse{
+		BuildID: target.ID,
+		Error:   target.Error,
+		LogPath: logPath,
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		// Log doesn't exist — return what we have from the build record.
+		resp.ErrorLines = []string{}
+		out, _ := json.MarshalIndent(resp, "", "  ")
+		return mcp.NewToolResultText(string(out)), nil
+	}
+
+	resp.ErrorLines = extractBuildErrors(string(data), 3, 50)
+	out, _ := json.MarshalIndent(resp, "", "  ")
+	return mcp.NewToolResultText(string(out)), nil
+}
+
+// extractBuildErrors finds lines containing error markers and returns each
+// with ±contextLines neighbors, capped at maxLines total. Markers are matched
+// case-insensitively against common UBT/MSBuild/clang patterns.
+func extractBuildErrors(logContent string, contextLines, maxLines int) []string {
+	lines := strings.Split(logContent, "\n")
+	markers := []string{"error:", "fatal error:", "error c", "error :", "undefined reference", "ld: error"}
+
+	included := make(map[int]bool)
+	for i, line := range lines {
+		lower := strings.ToLower(line)
+		for _, m := range markers {
+			if strings.Contains(lower, m) {
+				start := i - contextLines
+				if start < 0 {
+					start = 0
+				}
+				end := i + contextLines
+				if end >= len(lines) {
+					end = len(lines) - 1
+				}
+				for j := start; j <= end; j++ {
+					included[j] = true
+				}
+				break
+			}
+		}
+	}
+
+	if len(included) == 0 {
+		return []string{}
+	}
+
+	// Emit in order, capped at maxLines.
+	out := make([]string, 0, len(included))
+	for i := 0; i < len(lines); i++ {
+		if included[i] {
+			out = append(out, lines[i])
+			if len(out) >= maxLines {
+				out = append(out, fmt.Sprintf("... (truncated, %d more error-context lines available in %s)", len(included)-len(out), "log file"))
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// handleStartEditor wraps the daemon's instance manager.
+// project_path is optional — the agent should pass its cwd if it doesn't know
+// the .uproject path. We resolve either to a .uproject by walking up.
+func (w *mcpServerWrapper) handleStartEditor(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	rawPath := req.GetString("project_path", "")
+	if rawPath == "" {
+		return mcp.NewToolResultError("project_path is required — pass your current working directory if you don't know the .uproject path"), nil
+	}
+
+	uprojectPath, err := resolveUprojectPath(rawPath)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	enginePath := req.GetString("engine_path", "")
+	if enginePath == "" {
+		uproject, uErr := pkg.NewUprojectE(uprojectPath)
+		if uErr == nil && uproject.EngineAssociation != "" {
+			enginePath = pkg.GetEnginePath(uproject.EngineAssociation)
+		}
+		if enginePath == "" {
+			return mcp.NewToolResultError("engine_path could not be auto-resolved from .uproject; pass it explicitly"), nil
+		}
+	}
+
+	info, err := w.daemon.manager.StartEditor(&StartEditorRequest{
+		ProjectPath: uprojectPath,
+		EnginePath:  enginePath,
+	})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	data, _ := json.MarshalIndent(info, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// handleStopEditor stops a managed editor instance.
+func (w *mcpServerWrapper) handleStopEditor(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	projectPath := req.GetString("project_path", "")
+	if projectPath == "" {
+		return mcp.NewToolResultError("project_path is required"), nil
+	}
+	force := req.GetBool("force", false)
+
+	info, err := w.daemon.manager.StopEditor(projectPath, force)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	data, _ := json.MarshalIndent(info, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// handleListInstances lists all editor instances managed by the daemon.
+func (w *mcpServerWrapper) handleListInstances(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	instances := w.daemon.manager.ListInstances()
+	data, _ := json.MarshalIndent(map[string]interface{}{
+		"instances": instances,
+		"count":     len(instances),
+	}, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// resolveUprojectPath accepts either a .uproject path or a directory and
+// returns the absolute .uproject path. Mirrors UpdateProjectPath() in
+// cmd/root.go: walks up from the given path until it finds a .uproject file.
+func resolveUprojectPath(rawPath string) (string, error) {
+	abs, err := filepath.Abs(rawPath)
+	if err != nil {
+		return "", fmt.Errorf("invalid path %q: %w", rawPath, err)
+	}
+
+	// If it's already a .uproject file, verify and return.
+	if strings.HasSuffix(strings.ToLower(abs), ".uproject") {
+		if _, err := os.Stat(abs); err != nil {
+			return "", fmt.Errorf(".uproject not found at %s: %w", abs, err)
+		}
+		return abs, nil
+	}
+
+	// Otherwise, treat as a directory and walk up.
+	stat, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("path not found: %s", abs)
+	}
+	dir := abs
+	if !stat.IsDir() {
+		dir = filepath.Dir(abs)
+	}
+
+	for {
+		entries, err := os.ReadDir(dir)
+		if err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".uproject") {
+					return filepath.Join(dir, e.Name()), nil
+				}
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("no .uproject found at or above %s", abs)
+		}
+		dir = parent
+	}
 }
 
 // --- Resource Handlers ---

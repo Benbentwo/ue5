@@ -78,6 +78,29 @@ ue5 server agents --json                      # List registered AI agents
 
 See `ue5 server --help` for all available subcommands.
 
+### Log Locations
+
+All server state lives under `~/.ue5/`. Logs are stored per-project using a hash of the `.uproject` path:
+
+| File | Path | Contents |
+|------|------|----------|
+| Editor log | `~/.ue5/logs/<hash>/editor.log` | Captured editor stdout/stderr |
+| Build log | `~/.ue5/logs/<hash>/build.log` | UBT compiler output (errors, warnings, linker output) |
+| Daemon state | `~/.ue5/state.json` | Build history, accumulated features, active agents |
+
+The `<hash>` is the first 12 hex characters of `SHA-256(project_path)`. To read a build log directly:
+
+```bash
+cat ~/.ue5/logs/$(echo -n "/path/to/YourProject.uproject" | shasum -a 256 | cut -c1-12)/build.log
+```
+
+Or use the CLI, which resolves the hash for you:
+
+```bash
+ue5 server logs --level error          # Query captured editor logs
+ue5 server build-info --json           # Build status and history
+```
+
 ### Dashboard
 
 The daemon ships a web dashboard that shows real-time build status, editor instances, and connected AI agents. It starts automatically with the daemon on port **9516** (override with the `UE5_DASHBOARD_PORT` environment variable).

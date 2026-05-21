@@ -70,6 +70,18 @@ ue5 server logs --lines 0
 3. If errors found, correlate with code using file paths and line numbers in the output
 4. Provide a summary of findings to the user
 
+## On-Disk Log Locations
+
+If the daemon isn't running or you need raw log files, they live under `~/.ue5/logs/<hash>/` where `<hash>` is the first 12 hex chars of `SHA-256(project_path)`:
+
+- **Editor log**: `~/.ue5/logs/<hash>/editor.log` — captured editor stdout/stderr
+- **Build log**: `~/.ue5/logs/<hash>/build.log` — raw UBT compiler output (compile errors, linker failures)
+
+To read a log file directly when the daemon is down:
+```bash
+cat ~/.ue5/logs/$(echo -n "/path/to/YourProject.uproject" | shasum -a 256 | cut -c1-12)/build.log
+```
+
 ## Important Notes
 
 - Logs are only captured for editor instances started via `ue5 server run` or `/uem:start`
