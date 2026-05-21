@@ -1,0 +1,17 @@
+{
+  "name": "ue5",
+  "owner": {
+    "name": "Benbentwo",
+    "url": "https://github.com/Benbentwo"
+  },
+  "plugins": [
+    {
+      "name": "uem",
+      "source": "./plugin",
+      "description": "Unreal Editor Manager - editor lifecycle management, AI-driven rebuilds, log analysis, and MCP integration for UE5",
+      "version": "1.0.0",
+      "homepage": "https://github.com/Benbentwo/ue5",
+      "keywords": ["unreal", "ue5", "mcp", "editor", "build"]
+    }
+  ]
+}

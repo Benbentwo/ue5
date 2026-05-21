@@ -1,8 +1,14 @@
 # UE5 CLI
 ## Unreal Engine 5 Command Line Interface
-This is a command line interface for Unreal Engine 5, designed to simplify the process of building and packaging projects. It provides a set of commands that can be used to automate common tasks, such as building, packaging, and launching projects.
 
-This is very similar to Adam Rehn's [ue4 cli](https://docs.adamrehn.com/ue4cli/overview/introduction-to-ue4cli/), but built with GO as to avoid Python dependencies and to provide a more robust solution.
+A command line tool for Unreal Engine 5 that handles the boring parts of UE5 development. It started as a build/package automator (think Adam Rehn's [ue4 cli](https://docs.adamrehn.com/ue4cli/overview/introduction-to-ue4cli/) but in Go, no Python required) and has grown into a full editor management daemon.
+
+**What you get:**
+- **CLI commands** — `build`, `gen`, `package`, `clean`, `run` that auto-detect your engine version from the `.uproject` and Epic Games Launcher manifests
+- **Server mode** — a background daemon that manages editor instances, captures all logs, and coordinates AI-driven rebuilds
+- **Web dashboard** — real-time view of build status, editor instances, and connected agents at [http://localhost:9516](http://localhost:9516)
+- **MCP integration** — push notifications to AI agents over SSE so Claude Code (and other MCP clients) can drive your build-test-debug loop
+- **Claude Code plugin** (`uem`) — slash commands, a specialized agent, and skills for UE5 development
 
 ## Installation
 Prerequisites: Go 1.24+.
@@ -15,13 +21,48 @@ go install .
 This installs the `ue5` binary to `$(go env GOPATH)/bin` (or `$(go env GOBIN)` if set). Make sure that directory is on your `PATH`.
 
 ### Install from GitHub release (no repo clone)
-1) Go to the project GitHub Releases page and download the asset for your OS/arch.
-2) Extract it (if it is a .zip or .tar.gz).
-3) Make it executable and move it onto your PATH:
-```console
-chmod +x ue5
-mv ue5 /usr/local/bin/ue5
+
+One-liner for macOS / Linux — resolves the latest tag, downloads the right asset for your OS/arch, and drops the `ue5` binary into `/usr/local/bin`:
+
+```bash
+TAG=$(curl -fsSL https://api.github.com/repos/Benbentwo/ue5/releases/latest | grep '"tag_name"' | cut -d'"' -f4) \
+  && OS=$(uname -s | tr '[:upper:]' '[:lower:]') \
+  && ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
+  && curl -fsSL "https://github.com/Benbentwo/ue5/releases/download/${TAG}/ue5_${TAG#v}_${OS}_${ARCH}.tar.gz" \
+     | sudo tar xz -C /usr/local/bin ue5
 ```
+
+Verify: `ue5 version`.
+
+Windows users: grab the `.tar.gz` for `windows_amd64` from the [Releases page](https://github.com/Benbentwo/ue5/releases/latest) and extract `ue5.exe` somewhere on your `PATH`.
+
+### Install the Claude Code plugin (`uem`)
+
+The repo ships a Claude Code plugin called **`uem`** (Unreal Editor Manager) that turns the `ue5` daemon into a first-class part of your Claude Code workflow:
+
+- **Slash commands** — `/server`, `/start`, `/stop`, `/rebuild`, `/logs` drive the daemon without leaving Claude
+- **`ue5-dev-assistant` agent** — autonomously runs the build → test → debug loop, querying captured logs and triggering rebuilds via the daemon
+- **`ue5-development` skill** — activates automatically when Claude is working in a UE5 project, surfacing daemon-aware patterns
+
+The plugin assumes the `ue5` binary is on your `PATH` (install it first via the one-liner above).
+
+**Install via the Claude Code marketplace** (recommended):
+
+```text
+/plugin marketplace add Benbentwo/ue5
+/plugin install uem@ue5
+```
+
+This pulls the marketplace manifest from this repo, registers `uem`, and installs it. Updates are a single `/plugin update uem@ue5` away.
+
+**Install from a local clone** (for plugin development):
+
+```bash
+git clone https://github.com/Benbentwo/ue5.git ~/src/ue5
+ln -s ~/src/ue5/plugin ~/.claude/plugins/uem
+```
+
+Either way, confirm with `/plugin list` — you should see `uem` enabled.
 
 ## Usage
 ```conosle
@@ -103,7 +144,11 @@ ue5 server build-info --json           # Build status and history
 
 ### Dashboard
 
-The daemon ships a web dashboard that shows real-time build status, editor instances, and connected AI agents. It starts automatically with the daemon on port **9516** (override with the `UE5_DASHBOARD_PORT` environment variable).
+The daemon ships a web dashboard that shows real-time build status, editor instances, and connected AI agents. Once the daemon is running (`ue5 server start`), open:
+
+**→ [http://localhost:9516](http://localhost:9516)**
+
+Override the port with the `UE5_DASHBOARD_PORT` environment variable if `9516` conflicts with something else.
 
 Key features:
 - **Live updates** via Server-Sent Events (SSE) — no polling required
