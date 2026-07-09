@@ -12,28 +12,42 @@ import (
 	"github.com/charmbracelet/log"
 )
 
+const (
+	// defaultApprovalRetryInterval is how long to wait between restart
+	// approval rounds while agents report busy.
+	defaultApprovalRetryInterval = 5 * time.Second
+	// defaultApprovalTimeout bounds the total time spent waiting for agent
+	// approval. Once exceeded the build proceeds anyway — a client that
+	// cannot or will not answer must not hold full rebuilds hostage.
+	defaultApprovalTimeout = 2 * time.Minute
+)
+
 // BuildOrchestrator manages the build lifecycle with coalescing support.
 type BuildOrchestrator struct {
-	manager         *InstanceManager
-	state           *StateStore
-	agents          *AgentRegistry
-	mcpServer       *mcpServerWrapper
-	restartApprover func(ctx context.Context) (bool, []string)
-	buildRunner     func(record *BuildRecord) error // defaults to runBuild; overridable for testing
-	mu              sync.Mutex
-	building        bool
-	queue           []RebuildRequest
-	buildCapture    *LogCapture
-	buildCaptureMu  sync.RWMutex
+	manager               *InstanceManager
+	state                 *StateStore
+	agents                *AgentRegistry
+	mcpServer             *mcpServerWrapper
+	restartApprover       func(ctx context.Context) (bool, []string)
+	buildRunner           func(record *BuildRecord) error // defaults to runBuild; overridable for testing
+	approvalRetryInterval time.Duration
+	approvalTimeout       time.Duration
+	mu                    sync.Mutex
+	building              bool
+	queue                 []RebuildRequest
+	buildCapture          *LogCapture
+	buildCaptureMu        sync.RWMutex
 }
 
 // NewBuildOrchestrator creates a new build orchestrator.
 func NewBuildOrchestrator(manager *InstanceManager, state *StateStore, agents *AgentRegistry) *BuildOrchestrator {
 	return &BuildOrchestrator{
-		manager: manager,
-		state:   state,
-		agents:  agents,
-		queue:   []RebuildRequest{},
+		manager:               manager,
+		state:                 state,
+		agents:                agents,
+		queue:                 []RebuildRequest{},
+		approvalRetryInterval: defaultApprovalRetryInterval,
+		approvalTimeout:       defaultApprovalTimeout,
 	}
 }
 
@@ -233,15 +247,34 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *BuildRecord) error {
 	enginePath := b.resolveEnginePath(record)
 
-	// Step 1: Check with connected agents before disrupting the editor
+	// Step 1: Check with connected agents before disrupting the editor.
+	// Approval is best-effort with a hard deadline: agents that answer "busy"
+	// delay the restart, but a client that cannot or will not answer must not
+	// hold the build hostage forever — past the deadline we log the blockers
+	// loudly and proceed.
 	if b.restartApprover != nil {
+		deadline := time.Now().Add(b.approvalTimeout)
 		for {
 			approved, blockers := b.restartApprover(ctx)
 			if approved {
 				break
 			}
-			log.Info("Restart blocked by agents, retrying in 5s",
-				"build_id", record.ID, "blockers", blockers)
+			if time.Now().After(deadline) {
+				log.Warn("Restart approval deadline exceeded; proceeding with rebuild despite blockers",
+					"build_id", record.ID, "blockers", blockers, "waited", b.approvalTimeout)
+				b.agents.Emit(AgentEvent{
+					Type:      "restart_forced",
+					Timestamp: time.Now(),
+					Data: map[string]interface{}{
+						"build_id":        record.ID,
+						"blocking_agents": blockers,
+						"waited":          b.approvalTimeout.String(),
+					},
+				})
+				break
+			}
+			log.Info("Restart blocked by agents, retrying",
+				"build_id", record.ID, "blockers", blockers, "retry_in", b.approvalRetryInterval)
 			b.agents.Emit(AgentEvent{
 				Type:      "restart_blocked",
 				Timestamp: time.Now(),
@@ -253,7 +286,7 @@ func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *Buil
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("build cancelled while waiting for agent approval")
-			case <-time.After(5 * time.Second):
+			case <-time.After(b.approvalRetryInterval):
 				// retry
 			}
 		}

@@ -378,7 +378,7 @@ func (d *Daemon) handleGetBuildInfo(conn net.Conn, req Request) {
 		BuildInfo: &BuildInfoResponse{
 			CurrentBuild:        d.state.GetCurrentBuild(),
 			AccumulatedFeatures: d.state.GetAccumulatedFeatures(),
-			TotalBuilds:         len(d.state.GetState().BuildHistory),
+			TotalBuilds:         d.state.TotalBuilds(),
 			RecentBuilds:        d.state.GetBuildHistory(10),
 		},
 	})

@@ -4,8 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
+)
+
+const (
+	// maxBuildHistory caps how many full BuildRecords state.json retains.
+	// Older records are rolled to the JSONL archive next to the state file.
+	maxBuildHistory = 100
+
+	// maxAccumulatedFeatures caps the deduplicated feature-label list carried
+	// on the current build.
+	maxAccumulatedFeatures = 200
 )
 
 // PersistentState is the top-level schema for ~/.ue5/state.json.
@@ -13,6 +24,7 @@ type PersistentState struct {
 	CurrentBuild *BuildRecord  `json:"current_build,omitempty"`
 	BuildHistory []BuildRecord `json:"build_history"`
 	ActiveAgents []AgentInfo   `json:"active_agents"`
+	TotalBuilds  int           `json:"total_builds"`
 	LastModified time.Time     `json:"last_modified"`
 }
 
@@ -60,19 +72,35 @@ func (s *StateStore) Load() error {
 		state.ActiveAgents = []AgentInfo{}
 	}
 
+	// Migrate files written before retention caps existed: derive the
+	// lifetime counter, strip per-record accumulated features (derived data
+	// that grew state.json quadratically with build count), and prune the
+	// current build's list.
+	if state.TotalBuilds == 0 {
+		state.TotalBuilds = len(state.BuildHistory)
+	}
+	for i := range state.BuildHistory {
+		state.BuildHistory[i].Features = nil
+	}
+	if state.CurrentBuild != nil {
+		state.CurrentBuild.Features = accumulateFeatures(state.CurrentBuild.Features, nil)
+	}
+
 	s.state = state
+	s.trimHistoryLocked()
 	return nil
 }
 
 // Save writes state to disk atomically (write to temp file, then rename).
 func (s *StateStore) Save() error {
+	// Marshal while holding the lock: the snapshot shares slice backing
+	// arrays with s.state, so encoding after unlock races with in-place
+	// mutations like UpdateBuildStatus.
 	s.mu.RLock()
 	state := s.state
-	s.mu.RUnlock()
-
 	state.LastModified = time.Now()
-
 	data, err := json.MarshalIndent(state, "", "  ")
+	s.mu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
@@ -108,17 +136,68 @@ func (s *StateStore) AddBuildRecord(record BuildRecord) {
 	defer s.mu.Unlock()
 
 	// Accumulate features from previous build
+	var prior []string
 	if s.state.CurrentBuild != nil {
-		existing := make([]string, len(s.state.CurrentBuild.Features))
-		copy(existing, s.state.CurrentBuild.Features)
-		record.Features = append(existing, record.Labels...)
-	} else {
-		record.Features = make([]string, len(record.Labels))
-		copy(record.Features, record.Labels)
+		prior = s.state.CurrentBuild.Features
 	}
+	record.Features = accumulateFeatures(prior, record.Labels)
 
 	s.state.CurrentBuild = &record
-	s.state.BuildHistory = append(s.state.BuildHistory, record)
+
+	// History entries don't carry the accumulated feature list: it's derived
+	// data, and persisting a copy per record made state.json grow
+	// quadratically with build count.
+	entry := record
+	entry.Features = nil
+	s.state.BuildHistory = append(s.state.BuildHistory, entry)
+	s.state.TotalBuilds++
+	s.trimHistoryLocked()
+}
+
+// accumulateFeatures merges new labels into the existing feature list,
+// dropping duplicates and keeping only the most recent maxAccumulatedFeatures.
+func accumulateFeatures(existing, labels []string) []string {
+	merged := make([]string, 0, len(existing)+len(labels))
+	seen := make(map[string]struct{}, len(existing)+len(labels))
+	for _, group := range [][]string{existing, labels} {
+		for _, f := range group {
+			if _, dup := seen[f]; dup {
+				continue
+			}
+			seen[f] = struct{}{}
+			merged = append(merged, f)
+		}
+	}
+	if len(merged) > maxAccumulatedFeatures {
+		merged = append([]string{}, merged[len(merged)-maxAccumulatedFeatures:]...)
+	}
+	return merged
+}
+
+// trimHistoryLocked rolls history beyond maxBuildHistory to the archive file.
+// Caller must hold s.mu.
+func (s *StateStore) trimHistoryLocked() {
+	overflow := len(s.state.BuildHistory) - maxBuildHistory
+	if overflow <= 0 {
+		return
+	}
+	s.appendToArchive(s.state.BuildHistory[:overflow])
+	s.state.BuildHistory = append([]BuildRecord{}, s.state.BuildHistory[overflow:]...)
+}
+
+// appendToArchive appends records to the JSONL history archive. Best-effort:
+// an unwritable archive must never block builds or state persistence.
+func (s *StateStore) appendToArchive(records []BuildRecord) {
+	f, err := os.OpenFile(s.archivePath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, r := range records {
+		r.Features = nil // derived from prior labels; omit to keep the archive compact
+		_ = enc.Encode(r)
+	}
 }
 
 // UpdateBuildStatus updates the status of a build record by ID.
@@ -181,6 +260,19 @@ func (s *StateStore) SetActiveAgents(agents []AgentInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.ActiveAgents = agents
+}
+
+// TotalBuilds returns the lifetime build count, including records trimmed
+// from history.
+func (s *StateStore) TotalBuilds() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.TotalBuilds
+}
+
+// archivePath returns the JSONL file that trimmed history records roll to.
+func (s *StateStore) archivePath() string {
+	return filepath.Join(filepath.Dir(s.path), "history_archive.jsonl")
 }
 
 // GetState returns a snapshot of the full persistent state.
