@@ -119,6 +119,9 @@ func (b *BuildOrchestrator) createRecord(requests []RebuildRequest) *BuildRecord
 		if record.ProjectPath == "" {
 			record.ProjectPath = req.ProjectPath
 		}
+		if record.EnginePath == "" {
+			record.EnginePath = req.EnginePath
+		}
 		if record.Target == "" {
 			record.Target = req.Target
 		}
@@ -194,12 +197,12 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 		Type:      "rebuild_complete",
 		Timestamp: now,
 		Data: map[string]interface{}{
-			"build_id":            record.ID,
-			"status":              string(status),
-			"error":               errMsg,
-			"contributions":       record.Contributions,
+			"build_id":             record.ID,
+			"status":               string(status),
+			"error":                errMsg,
+			"contributions":        record.Contributions,
 			"accumulated_features": b.state.GetAccumulatedFeatures(),
-			"duration":            now.Sub(record.StartedAt).String(),
+			"duration":             now.Sub(record.StartedAt).String(),
 		},
 	})
 
@@ -217,20 +220,20 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 	b.mu.Unlock()
 }
 
-// executeFullRebuild builds first (editor stays running), then stops and restarts
-// only if the build succeeds. This keeps the editor available during compilation
-// and avoids unnecessary downtime on build failures.
+// executeFullRebuild performs a strict stop -> build -> restart cycle.
+//
+// The ordering is load-bearing: UBT decides at startup whether to build in
+// hot-reload mode by checking for live UnrealEditor processes from the same
+// engine. If any editor is alive when UBT starts — tracked, orphaned from a
+// previous daemon, or launched by hand — the build emits
+// libUnrealEditor-<Module>-000N patch binaries instead of relinking the base
+// binaries, the build reports success, and the restarted editor silently runs
+// stale code. The editor must be verifiably exited (process gone, not just
+// signalled) before UBT starts.
 func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *BuildRecord) error {
-	// Step 1: Run the build while the editor stays running
-	buildFn := b.runBuild
-	if b.buildRunner != nil {
-		buildFn = b.buildRunner
-	}
-	if err := buildFn(record); err != nil {
-		return fmt.Errorf("build failed: %w", err)
-	}
+	enginePath := b.resolveEnginePath(record)
 
-	// Step 2: Build succeeded — check with connected agents before stopping editor
+	// Step 1: Check with connected agents before disrupting the editor
 	if b.restartApprover != nil {
 		for {
 			approved, blockers := b.restartApprover(ctx)
@@ -256,47 +259,84 @@ func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *Buil
 		}
 	}
 
-	// Step 3: Stop the editor
-	instances := b.manager.ListInstances()
-	for _, inst := range instances {
+	// Step 2: Stop the tracked editor instance (waits for actual process
+	// exit, force-killing after 10s)
+	for _, inst := range b.manager.ListInstances() {
 		if inst.ProjectPath == record.ProjectPath && (inst.State == StateRunning || inst.State == StateStarting) {
 			log.Info("Stopping editor for rebuild", "project", inst.ProjectName, "pid", inst.PID)
 			if _, err := b.manager.StopEditor(inst.ProjectPath, false); err != nil {
-				log.Warn("Failed to stop editor, continuing with restart", "error", err)
+				log.Warn("Failed to stop editor via instance manager, relying on process gate", "error", err)
 			}
 			break
 		}
 	}
 
-	// Step 4: Restart the editor
-	// Find the engine path from the last known instance, then fall back to .uproject manifest lookup
-	enginePath := ""
-	for _, inst := range instances {
-		if inst.ProjectPath == record.ProjectPath {
-			enginePath = inst.EnginePath
-			break
+	// Step 3: Gate — verify at the process level that NO UnrealEditor from
+	// this engine is still alive (catches orphans the daemon never tracked).
+	// Refuses to start UBT if any editor survives termination.
+	if enginePath != "" {
+		if err := ensureNoEditorProcesses(pkg.EditorBinaryPath(enginePath), record.ProjectPath); err != nil {
+			return fmt.Errorf("refusing to start UBT: %w", err)
 		}
-	}
-	if enginePath == "" {
-		uproject, err := pkg.NewUprojectE(record.ProjectPath)
-		if err == nil && uproject.EngineAssociation != "" {
-			enginePath = pkg.GetEnginePath(uproject.EngineAssociation)
-		}
-	}
-	if enginePath == "" {
-		log.Warn("No engine path found, skipping editor restart")
-		return nil
+	} else {
+		log.Warn("No engine path resolved; skipping editor process gate", "build_id", record.ID)
 	}
 
-	_, err := b.manager.StartEditor(&StartEditorRequest{
+	// Step 4: Delete stale hot-reload patch binaries from earlier incidents
+	// so module manifests can only reference freshly linked base binaries.
+	if removed := cleanHotReloadArtifacts(filepath.Dir(record.ProjectPath)); len(removed) > 0 {
+		log.Warn("Removed stale hot-reload patch binaries", "count", len(removed), "files", removed)
+	}
+
+	// Step 5: Run the build with no editor alive
+	buildFn := b.runBuild
+	if b.buildRunner != nil {
+		buildFn = b.buildRunner
+	}
+	buildErr := buildFn(record)
+
+	// Step 6: Restart the editor. On build failure the previous binaries are
+	// still intact, so restarting keeps the machine usable either way.
+	if enginePath == "" {
+		log.Warn("No engine path found, skipping editor restart")
+		if buildErr != nil {
+			return fmt.Errorf("build failed: %w", buildErr)
+		}
+		return nil
+	}
+	if _, err := b.manager.StartEditor(&StartEditorRequest{
 		ProjectPath: record.ProjectPath,
 		EnginePath:  enginePath,
-	})
-	if err != nil {
+	}); err != nil {
+		if buildErr != nil {
+			return fmt.Errorf("build failed: %w (editor restart also failed: %v)", buildErr, err)
+		}
 		return fmt.Errorf("editor restart failed: %w", err)
 	}
 
+	if buildErr != nil {
+		return fmt.Errorf("build failed: %w", buildErr)
+	}
 	return nil
+}
+
+// resolveEnginePath finds the engine for a build: a tracked instance's engine
+// first, then the engine_path carried on the rebuild request, then the
+// .uproject's engine association manifest lookup.
+func (b *BuildOrchestrator) resolveEnginePath(record *BuildRecord) string {
+	for _, inst := range b.manager.ListInstances() {
+		if inst.ProjectPath == record.ProjectPath && inst.EnginePath != "" {
+			return inst.EnginePath
+		}
+	}
+	if record.EnginePath != "" {
+		return record.EnginePath
+	}
+	uproject, err := pkg.NewUprojectE(record.ProjectPath)
+	if err == nil && uproject.EngineAssociation != "" {
+		return pkg.GetEnginePath(uproject.EngineAssociation)
+	}
+	return ""
 }
 
 // executeHotReload builds in the background while the editor stays running.
@@ -317,21 +357,7 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 
 	log.Info("Running UBT build", "target", record.Target, "platform", record.Platform, "config", record.Configuration, "log", logPath)
 
-	// Resolve engine path
-	enginePath := ""
-	instances := b.manager.ListInstances()
-	for _, inst := range instances {
-		if inst.ProjectPath == record.ProjectPath {
-			enginePath = inst.EnginePath
-			break
-		}
-	}
-	if enginePath == "" {
-		uproject, err := pkg.NewUprojectE(record.ProjectPath)
-		if err == nil && uproject.EngineAssociation != "" {
-			enginePath = pkg.GetEnginePath(uproject.EngineAssociation)
-		}
-	}
+	enginePath := b.resolveEnginePath(record)
 	if enginePath == "" {
 		return fmt.Errorf("cannot determine engine path for project: %s", record.ProjectPath)
 	}
@@ -344,6 +370,14 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 	b.setBuildCapture(capture)
 	defer b.clearBuildCapture()
 
+	// Full builds must never produce hot-reload patch binaries, even if an
+	// editor slips in between the process gate and UBT startup — the flag
+	// forces UBT to link base binaries regardless of editor detection.
+	var extraArgs []string
+	if record.Mode == BuildModeFull {
+		extraArgs = append(extraArgs, "-NoHotReloadFromIDE")
+	}
+
 	// Get piped command
 	cmd, stdout, stderr, err := pkg.RunBuildScriptPiped(
 		enginePath,
@@ -351,6 +385,7 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 		record.Platform,
 		record.Configuration,
 		record.ProjectPath,
+		extraArgs...,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create build command: %w", err)

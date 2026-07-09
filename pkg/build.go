@@ -48,14 +48,16 @@ func RunBuildScriptToWriter(enginePath, target, platform, state, projectPath str
 
 // RunBuildScriptPiped prepares a build command with piped stdout/stderr.
 // The caller is responsible for calling cmd.Start(), reading from the pipes,
-// and calling cmd.Wait().
-func RunBuildScriptPiped(enginePath, target, platform, state, projectPath string) (cmd *exec.Cmd, stdout io.ReadCloser, stderr io.ReadCloser, err error) {
+// and calling cmd.Wait(). extraArgs are passed through Build.sh/Build.bat
+// verbatim to UnrealBuildTool.
+func RunBuildScriptPiped(enginePath, target, platform, state, projectPath string, extraArgs ...string) (cmd *exec.Cmd, stdout io.ReadCloser, stderr io.ReadCloser, err error) {
 	osPath := OsStringSliceSwitcher(WindowsBuildScript, UnixBuildScript, UnixBuildScript)
 	basePath := []string{enginePath}
 	pathElements := append(basePath, osPath...)
 	buildScript := filepath.Join(pathElements...)
 
-	cmd = exec.Command(buildScript, target, platform, state, projectPath)
+	args := append([]string{target, platform, state, projectPath}, extraArgs...)
+	cmd = exec.Command(buildScript, args...)
 
 	stdout, err = cmd.StdoutPipe()
 	if err != nil {
