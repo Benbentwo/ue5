@@ -192,7 +192,7 @@ func (s *StateStore) appendToArchive(records []BuildRecord) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	enc := json.NewEncoder(f)
 	for _, r := range records {
 		r.Features = nil // derived from prior labels; omit to keep the archive compact
