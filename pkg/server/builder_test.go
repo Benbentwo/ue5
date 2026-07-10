@@ -277,6 +277,7 @@ func TestFullRebuildEmitsRestartBlocked(t *testing.T) {
 		}
 		return true, nil
 	}
+	b.approvalRetryInterval = 10 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -305,6 +306,76 @@ func TestFullRebuildEmitsRestartBlocked(t *testing.T) {
 
 	if callCount < 2 {
 		t.Errorf("Expected approver to be called at least twice, got %d", callCount)
+	}
+}
+
+func TestFullRebuildProceedsAfterApprovalDeadline(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	var events []AgentEvent
+	var mu sync.Mutex
+	agents.SetEventCallback(func(event AgentEvent) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	})
+
+	buildRan := false
+	b.buildRunner = func(record *BuildRecord) error {
+		buildRan = true
+		return nil
+	}
+
+	// An approver that never approves — e.g. a wedged client that times out
+	// every round. Without a deadline this loops forever.
+	approverCalls := 0
+	b.restartApprover = func(ctx context.Context) (bool, []string) {
+		approverCalls++
+		return false, []string{"session-stuck"}
+	}
+	b.approvalRetryInterval = 10 * time.Millisecond
+	b.approvalTimeout = 50 * time.Millisecond
+
+	record := &BuildRecord{
+		ID:          "test-deadline",
+		ProjectPath: "/fake/project.uproject",
+		Mode:        BuildModeFull,
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- b.executeFullRebuild(context.Background(), record) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Expected build to proceed after approval deadline, got error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executeFullRebuild did not return: approval deadline was not enforced")
+	}
+
+	if !buildRan {
+		t.Error("Expected build to run once the approval deadline expired")
+	}
+	if approverCalls < 2 {
+		t.Errorf("Expected approver to be retried before the deadline, got %d call(s)", approverCalls)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	foundForced := false
+	for _, e := range events {
+		if e.Type == "restart_forced" {
+			foundForced = true
+			break
+		}
+	}
+	if !foundForced {
+		t.Error("Expected 'restart_forced' event when proceeding past blockers")
 	}
 }
 

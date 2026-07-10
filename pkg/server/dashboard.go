@@ -144,7 +144,7 @@ func (ds *dashboardServer) handleBuild(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, BuildInfoResponse{
 		CurrentBuild:        ds.state.GetCurrentBuild(),
 		AccumulatedFeatures: ds.state.GetAccumulatedFeatures(),
-		TotalBuilds:         len(ds.state.GetState().BuildHistory),
+		TotalBuilds:         ds.state.TotalBuilds(),
 		RecentBuilds:        history,
 	})
 }

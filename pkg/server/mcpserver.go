@@ -119,7 +119,10 @@ func (w *mcpServerWrapper) BroadcastEvent(event AgentEvent) {
 // RequestRestartApproval asks all connected MCP clients whether they are okay
 // with an editor restart. Returns true if all agents approve (or if no agents
 // are connected). Returns false with a list of blocking session IDs if any
-// agent is busy or fails to respond.
+// agent answers busy, gives an ambiguous answer, or fails transiently
+// (e.g. times out). Sessions that are incapable of answering — no sampling
+// support, no server in the session context — do not block: they haven't
+// objected, and retrying them can never produce an answer.
 func (w *mcpServerWrapper) RequestRestartApproval(ctx context.Context) (approved bool, blockingAgents []string) {
 	w.sessionsMu.RLock()
 	if len(w.sessions) == 0 {
@@ -180,12 +183,24 @@ func (w *mcpServerWrapper) RequestRestartApproval(ctx context.Context) (approved
 
 			mcpSrv := mcpserver.ServerFromContext(e.ctx)
 			if mcpSrv == nil {
-				results <- result{sessionID: e.id, busy: true}
+				// No MCP server bound to this session's context: the daemon
+				// can never deliver a sampling request here, so the session
+				// can never answer. Not an objection — don't block on it.
+				log.Debug("Session context has no MCP server; not blocking restart", "session", e.id)
+				results <- result{sessionID: e.id, busy: false}
 				return
 			}
 
 			resp, err := mcpSrv.RequestSampling(samplingCtx, samplingReq)
 			if err != nil {
+				if isSamplingUnsupported(err) {
+					// The client is incapable of answering sampling requests;
+					// retrying can never change that. Only an explicit "yes
+					// I'm busy" answer should block a restart.
+					log.Debug("Client cannot answer sampling requests; not blocking restart", "session", e.id, "error", err)
+					results <- result{sessionID: e.id, busy: false}
+					return
+				}
 				log.Debug("Sampling request failed, treating as busy", "session", e.id, "error", err)
 				results <- result{sessionID: e.id, busy: true}
 				return
@@ -203,6 +218,33 @@ func (w *mcpServerWrapper) RequestRestartApproval(ctx context.Context) (approved
 	}
 
 	return len(blockingAgents) == 0, blockingAgents
+}
+
+// samplingUnsupportedPatterns match errors meaning the client can never
+// answer a sampling request — as opposed to transient failures (timeouts,
+// broken pipes) where the client might genuinely be busy. Notably, mcp-go's
+// SSE sessions do not implement SessionWithSampling at all, so every SSE
+// client hits "session does not support sampling".
+var samplingUnsupportedPatterns = []string{
+	"session does not support sampling", // mcp-go: transport lacks SessionWithSampling
+	"no active session",                 // mcp-go: no client session bound to context
+	"method not found",                  // JSON-RPC -32601 from a client without sampling
+	"not supported",                     // generic client-side rejection
+}
+
+// isSamplingUnsupported reports whether err indicates the client is incapable
+// of answering sampling requests, so it should not block a restart.
+func isSamplingUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, p := range samplingUnsupportedPatterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // noWordRegexp matches "no" as a standalone word (not as part of "not", "know", etc.).
@@ -478,7 +520,7 @@ func (w *mcpServerWrapper) handleGetBuildInfo(ctx context.Context, req mcp.CallT
 	}
 	info := slimBuildInfo{
 		CurrentBuild: currentSummary,
-		TotalBuilds:  len(w.daemon.state.GetState().BuildHistory),
+		TotalBuilds:  w.daemon.state.TotalBuilds(),
 		FeatureCount: len(w.daemon.state.GetAccumulatedFeatures()),
 	}
 
@@ -518,7 +560,7 @@ func (w *mcpServerWrapper) handleGetBuildHistory(ctx context.Context, req mcp.Ca
 	resp := BuildHistoryResponse{
 		Builds:              summaries,
 		AccumulatedFeatures: w.daemon.state.GetAccumulatedFeatures(),
-		TotalBuilds:         len(w.daemon.state.GetState().BuildHistory),
+		TotalBuilds:         w.daemon.state.TotalBuilds(),
 	}
 	data, _ := json.MarshalIndent(resp, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
@@ -726,7 +768,7 @@ func (w *mcpServerWrapper) handleBuildResource(ctx context.Context, req mcp.Read
 	info := &BuildInfoResponse{
 		CurrentBuild:        w.daemon.state.GetCurrentBuild(),
 		AccumulatedFeatures: w.daemon.state.GetAccumulatedFeatures(),
-		TotalBuilds:         len(w.daemon.state.GetState().BuildHistory),
+		TotalBuilds:         w.daemon.state.TotalBuilds(),
 		RecentBuilds:        w.daemon.state.GetBuildHistory(5),
 	}
 	data, _ := json.MarshalIndent(info, "", "  ")

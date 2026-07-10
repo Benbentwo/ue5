@@ -6,11 +6,11 @@ import "time"
 type RequestType string
 
 const (
-	ReqPing          RequestType = "ping"
-	ReqShutdown      RequestType = "shutdown"
-	ReqStartEditor   RequestType = "start_editor"
-	ReqStopEditor    RequestType = "stop_editor"
-	ReqListInstances RequestType = "list_instances"
+	ReqPing            RequestType = "ping"
+	ReqShutdown        RequestType = "shutdown"
+	ReqStartEditor     RequestType = "start_editor"
+	ReqStopEditor      RequestType = "stop_editor"
+	ReqListInstances   RequestType = "list_instances"
 	ReqGetLogs         RequestType = "get_logs"
 	ReqStreamLogs      RequestType = "stream_logs"
 	ReqRebuild         RequestType = "rebuild"
@@ -93,6 +93,7 @@ type BuildContribution struct {
 type BuildRecord struct {
 	ID            string              `json:"id"`
 	ProjectPath   string              `json:"project_path"`
+	EnginePath    string              `json:"engine_path,omitempty"`
 	Labels        []string            `json:"labels"`
 	Features      []string            `json:"features"`
 	Contributions []BuildContribution `json:"contributions"`
@@ -214,11 +215,11 @@ type Response struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
 
-	Instance  *InstanceInfo   `json:"instance,omitempty"`
-	Instances []InstanceInfo  `json:"instances,omitempty"`
-	Logs      *LogsResponse   `json:"logs,omitempty"`
-	LogLine   *LogLineEvent   `json:"log_line,omitempty"`
-	Pong      *PongResponse   `json:"pong,omitempty"`
+	Instance  *InstanceInfo      `json:"instance,omitempty"`
+	Instances []InstanceInfo     `json:"instances,omitempty"`
+	Logs      *LogsResponse      `json:"logs,omitempty"`
+	LogLine   *LogLineEvent      `json:"log_line,omitempty"`
+	Pong      *PongResponse      `json:"pong,omitempty"`
 	Build     *BuildRecord       `json:"build,omitempty"`
 	Builds    []BuildRecord      `json:"builds,omitempty"`
 	Agent     *AgentInfo         `json:"agent,omitempty"`
