@@ -16,6 +16,12 @@ var serverBuildInfoCmd = &cobra.Command{
 	Use:   "build-info",
 	Short: "Show current build metadata and feature history",
 	Run: func(cmd *cobra.Command, args []string) {
+		// Auto-start so build info survives daemon death: state.json is
+		// persistent, and a freshly started daemon serves it faithfully.
+		if err := server.EnsureDaemon(); err != nil {
+			log.Warn("Could not auto-start daemon", "error", err)
+		}
+
 		client := server.NewClient()
 
 		if !client.IsRunning() {

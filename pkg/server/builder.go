@@ -35,6 +35,7 @@ type BuildOrchestrator struct {
 	mu                    sync.Mutex
 	building              bool
 	queue                 []RebuildRequest
+	pending               *BuildRecord // shared record for queued requests; guarded by mu
 	buildCapture          *LogCapture
 	buildCaptureMu        sync.RWMutex
 }
@@ -76,18 +77,31 @@ func (b *BuildOrchestrator) RequestRebuild(ctx context.Context, req *RebuildRequ
 		b.queue = append(b.queue, *req)
 		log.Info("Rebuild queued for coalescing", "label", req.Label, "agent", req.AgentID, "queue_size", len(b.queue))
 
-		record := &BuildRecord{
-			ID:          fmt.Sprintf("build-%d", time.Now().UnixNano()),
-			ProjectPath: req.ProjectPath,
-			Labels:      []string{req.Label},
-			Contributions: []BuildContribution{{
-				AgentID: req.AgentID,
-				Label:   req.Label,
-			}},
-			Mode:   req.Mode,
-			Status: BuildStatusPending,
+		// All queued requests share ONE pending record, and the coalesced
+		// build keeps its ID when it starts (see the drain in executeBuild).
+		// Minting a fresh ID per queued caller — as this used to — hands out
+		// IDs that never appear in state or events, so clients polling them
+		// wait forever.
+		if b.pending == nil {
+			b.pending = &BuildRecord{
+				ID:            fmt.Sprintf("build-%d", time.Now().UnixNano()),
+				ProjectPath:   req.ProjectPath,
+				Labels:        []string{},
+				Contributions: []BuildContribution{},
+				Mode:          BuildModeHotReload,
+				Status:        BuildStatusPending,
+			}
 		}
-		return record, nil
+		b.pending.Labels = append(b.pending.Labels, req.Label)
+		b.pending.Contributions = append(b.pending.Contributions, BuildContribution{
+			AgentID: req.AgentID,
+			Label:   req.Label,
+		})
+		// Mode escalation: "full" wins over "hot_reload"
+		if req.Mode == BuildModeFull {
+			b.pending.Mode = BuildModeFull
+		}
+		return b.pendingCopyLocked(), nil
 	}
 
 	// Start build immediately
@@ -227,11 +241,38 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 		queued := b.queue
 		b.queue = nil
 		nextRecord := b.createRecord(queued)
+		if b.pending != nil {
+			// Queued callers hold the pending record's ID; the coalesced
+			// build must keep it so those IDs stay pollable end-to-end.
+			nextRecord.ID = b.pending.ID
+			b.pending = nil
+		}
 		b.building = true
 		go b.executeBuild(ctx, nextRecord)
 		log.Info("Starting coalesced build from queue", "build_id", nextRecord.ID, "coalesced_count", len(queued))
 	}
 	b.mu.Unlock()
+}
+
+// PendingBuild returns a copy of the queued-but-not-started coalesced build
+// record, or nil when nothing is queued. Lets status lookups resolve IDs that
+// were handed out for queued requests before the build starts.
+func (b *BuildOrchestrator) PendingBuild() *BuildRecord {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pendingCopyLocked()
+}
+
+// pendingCopyLocked deep-copies the pending record's caller-visible slices so
+// later queue merges don't mutate a record already returned. Caller holds mu.
+func (b *BuildOrchestrator) pendingCopyLocked() *BuildRecord {
+	if b.pending == nil {
+		return nil
+	}
+	record := *b.pending
+	record.Labels = append([]string(nil), b.pending.Labels...)
+	record.Contributions = append([]BuildContribution(nil), b.pending.Contributions...)
+	return &record
 }
 
 // executeFullRebuild performs a strict stop -> build -> restart cycle.

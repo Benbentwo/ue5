@@ -174,10 +174,14 @@ func compareVersions(v1, v2 string) int {
 	return 0
 }
 
-// DownloadAndInstall downloads the latest release and installs it
-func DownloadAndInstall(info *UpgradeInfo) error {
+// DownloadAndInstall downloads the latest release and installs it over the
+// current executable. Returns the path the binary was installed to so callers
+// can act on the new binary (e.g. restart the daemon from it) — after the
+// swap, os.Executable() still resolves to the replaced process image and must
+// not be trusted for that.
+func DownloadAndInstall(info *UpgradeInfo) (string, error) {
 	if info.DownloadURL == "" {
-		return fmt.Errorf("no download URL available for your platform")
+		return "", fmt.Errorf("no download URL available for your platform")
 	}
 
 	log.Info("Downloading", "url", info.DownloadURL)
@@ -185,13 +189,13 @@ func DownloadAndInstall(info *UpgradeInfo) error {
 	// Download to temp file
 	tmpDir, err := os.MkdirTemp("", "ue5-upgrade-*")
 	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	archivePath := filepath.Join(tmpDir, info.AssetName)
 	if err := downloadFile(info.DownloadURL, archivePath); err != nil {
-		return fmt.Errorf("failed to download: %w", err)
+		return "", fmt.Errorf("failed to download: %w", err)
 	}
 
 	log.Info("Download complete", "size", getFileSize(archivePath))
@@ -203,27 +207,27 @@ func DownloadAndInstall(info *UpgradeInfo) error {
 	}
 
 	if err := extractArchive(archivePath, tmpDir); err != nil {
-		return fmt.Errorf("failed to extract: %w", err)
+		return "", fmt.Errorf("failed to extract: %w", err)
 	}
 
 	// Get current executable path
 	currentExe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("failed to get current executable path: %w", err)
+		return "", fmt.Errorf("failed to get current executable path: %w", err)
 	}
 	currentExe, err = filepath.EvalSymlinks(currentExe)
 	if err != nil {
-		return fmt.Errorf("failed to resolve symlinks: %w", err)
+		return "", fmt.Errorf("failed to resolve symlinks: %w", err)
 	}
 
 	log.Info("Installing", "path", currentExe)
 
 	// Replace the current binary
 	if err := replaceBinary(extractedBinary, currentExe); err != nil {
-		return fmt.Errorf("failed to install: %w", err)
+		return "", fmt.Errorf("failed to install: %w", err)
 	}
 
-	return nil
+	return currentExe, nil
 }
 
 // downloadFile downloads a file from URL to the specified path
@@ -295,36 +299,45 @@ func extractZip(archivePath, destDir string) error {
 	return nil
 }
 
-// replaceBinary replaces the current binary with a new one
+// replaceBinary replaces the current binary with a new one.
+//
+// The swap MUST be a rename(2), never a write to the existing path: copying
+// over the live path (os.Create truncates in place) rewrites the inode that a
+// running daemon is executing from. macOS invalidates the code signature of a
+// modified running binary and SIGKILLs the process as soon as it faults in a
+// page from the file — this is exactly how the v0.3.25 upgrade silently killed
+// the daemon. A rename swaps in a new inode and leaves the old one intact for
+// any process still running it.
 func replaceBinary(newBinary, currentBinary string) error {
 	// Check if new binary exists
 	if _, err := os.Stat(newBinary); os.IsNotExist(err) {
 		return fmt.Errorf("new binary not found at %s", newBinary)
 	}
 
-	// Make the new binary executable
-	if err := os.Chmod(newBinary, 0755); err != nil {
-		return fmt.Errorf("failed to make binary executable: %w", err)
+	// Stage next to the target: rename(2) is atomic only within a filesystem,
+	// and the download's temp dir may be on a different volume.
+	staged := currentBinary + ".new"
+	if err := copyFile(newBinary, staged); err != nil {
+		return fmt.Errorf("failed to stage new binary: %w", err)
+	}
+	if err := os.Chmod(staged, 0755); err != nil {
+		_ = os.Remove(staged)
+		return fmt.Errorf("failed to make staged binary executable: %w", err)
 	}
 
-	// On Unix, we can rename over the running binary
-	// On Windows, we need to rename the old binary first
+	// Windows can't rename over a running executable; move it aside first.
 	if runtime.GOOS == "windows" {
 		oldBinary := currentBinary + ".old"
 		_ = os.Remove(oldBinary) // Remove any existing old binary
 		if err := os.Rename(currentBinary, oldBinary); err != nil {
+			_ = os.Remove(staged)
 			return fmt.Errorf("failed to rename old binary: %w", err)
 		}
 	}
 
-	// Copy new binary to current location
-	if err := copyFile(newBinary, currentBinary); err != nil {
-		return fmt.Errorf("failed to copy new binary: %w", err)
-	}
-
-	// Make sure the new binary is executable
-	if err := os.Chmod(currentBinary, 0755); err != nil {
-		return fmt.Errorf("failed to make installed binary executable: %w", err)
+	if err := os.Rename(staged, currentBinary); err != nil {
+		_ = os.Remove(staged)
+		return fmt.Errorf("failed to install new binary: %w", err)
 	}
 
 	return nil

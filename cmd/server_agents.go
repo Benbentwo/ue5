@@ -16,6 +16,10 @@ var serverAgentsCmd = &cobra.Command{
 	Use:   "agents",
 	Short: "List registered AI agents",
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := server.EnsureDaemon(); err != nil {
+			log.Warn("Could not auto-start daemon", "error", err)
+		}
+
 		client := server.NewClient()
 
 		if !client.IsRunning() {

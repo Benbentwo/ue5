@@ -275,7 +275,9 @@ func (w *mcpServerWrapper) registerTools() {
 			mcp.WithDescription("Trigger a rebuild of the UE5 project. "+
 				"Use mode 'full' for stop->build->restart cycle, "+
 				"or 'hot_reload' to build while editor stays running. "+
-				"Requests are coalesced when multiple agents request rebuilds concurrently."),
+				"Requests are coalesced when multiple agents request rebuilds concurrently. "+
+				"Poll the returned build id with get_build_status(build_id=...) — it stays "+
+				"resolvable through queueing, coalescing, and later builds superseding it."),
 			mcp.WithString("project_path", mcp.Required(),
 				mcp.Description("Absolute path to the .uproject file")),
 			mcp.WithString("engine_path", mcp.Required(),
@@ -324,10 +326,17 @@ func (w *mcpServerWrapper) registerTools() {
 	// If status == "failed", call get_build_failure with the ID for details.
 	w.mcp.AddTool(
 		mcp.NewTool("get_build_status",
-			mcp.WithDescription("Minimal status check for the current build. "+
+			mcp.WithDescription("Minimal status check for a build. "+
 				"Returns only {id, prompt, status} — designed for cheap polling. "+
+				"Pass build_id to poll YOUR build: it resolves even after another build "+
+				"supersedes it as current (looked up in queued + history records too). "+
+				"Omit build_id for the current build. "+
 				"If status is 'failed', call get_build_failure with the id to fetch error details. "+
-				"Returns empty id when no build has ever run."),
+				"Returns empty id when no build has ever run. "+
+				"An unknown build_id is an error — it means the daemon restarted since the id "+
+				"was issued; re-submit the rebuild rather than continuing to poll."),
+			mcp.WithString("build_id",
+				mcp.Description("Build ID to look up (from a rebuild response). Defaults to the current build.")),
 		),
 		w.handleGetBuildStatus,
 	)
@@ -530,16 +539,49 @@ func (w *mcpServerWrapper) handleGetBuildInfo(ctx context.Context, req mcp.CallT
 
 // handleGetBuildStatus returns the minimal {id, prompt, status} polling shape.
 // Joins coalesced labels with " + " so the prompt reads naturally.
+//
+// With build_id set, the lookup covers current + pending + history, so an
+// agent's id keeps resolving after its build is superseded as current (the
+// 2026-07-09 incident: a queued "manual" build replaced current_build 3ms
+// after an agent's build succeeded, and the agent — with no way to query its
+// own id — polled the current build forever).
 func (w *mcpServerWrapper) handleGetBuildStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	current := w.daemon.state.GetCurrentBuild()
+	buildID := req.GetString("build_id", "")
+	record := w.lookupBuild(buildID)
+	if record == nil && buildID != "" {
+		return mcp.NewToolResultError(fmt.Sprintf(
+			"unknown build id %q: not the current, queued, or any recorded build. "+
+				"The daemon has likely restarted since this id was issued (queued requests "+
+				"do not survive restarts) — re-submit the rebuild or check get_build_history.",
+			buildID)), nil
+	}
 	resp := BuildStatusResponse{}
-	if current != nil {
-		resp.ID = current.ID
-		resp.Status = current.Status
-		resp.Prompt = strings.Join(current.Labels, " + ")
+	if record != nil {
+		resp.ID = record.ID
+		resp.Status = record.Status
+		resp.Prompt = strings.Join(record.Labels, " + ")
 	}
 	data, _ := json.Marshal(resp) // no indent — every byte counts on this path
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+// lookupBuild resolves a build id against the current build, the pending
+// coalesced build, then history. An empty id means "the current build".
+func (w *mcpServerWrapper) lookupBuild(buildID string) *BuildRecord {
+	current := w.daemon.state.GetCurrentBuild()
+	if buildID == "" || (current != nil && current.ID == buildID) {
+		return current
+	}
+	if pending := w.daemon.builder.PendingBuild(); pending != nil && pending.ID == buildID {
+		return pending
+	}
+	for _, b := range w.daemon.state.GetBuildHistory(0) {
+		if b.ID == buildID {
+			record := b
+			return &record
+		}
+	}
+	return nil
 }
 
 // handleGetBuildHistory returns the full audit trail. Capped at 50 to bound
