@@ -16,6 +16,12 @@ var serverStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show status of managed editor instances",
 	Run: func(cmd *cobra.Command, args []string) {
+		// Heal a dead daemon rather than reporting it: fleet sessions poll
+		// status, and an always-on daemon is the intended steady state.
+		if err := server.EnsureDaemon(); err != nil {
+			log.Warn("Could not auto-start daemon", "error", err)
+		}
+
 		client := server.NewClient()
 
 		if !client.IsRunning() {

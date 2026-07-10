@@ -497,3 +497,145 @@ func TestHotReloadSkipsApprovalCheck(t *testing.T) {
 		t.Error("Approval check should NOT be called for hot reload")
 	}
 }
+
+// waitForOrchestratorIdle blocks until no build is running or queued. The
+// orchestrator clears its building flag only after the final state Save, so
+// idleness also means background goroutines are done touching the state file
+// — required before t.TempDir cleanup runs.
+func waitForOrchestratorIdle(t *testing.T, b *BuildOrchestrator) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for b.IsBuilding() || b.PendingBuild() != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("orchestrator did not quiesce within 5s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestQueuedRequestsShareStableBuildID covers the ID-continuity contract for
+// queued rebuilds: every caller that queues while a build is in flight gets
+// the SAME pending id, and the coalesced build keeps that id when it starts,
+// so the ids handed out are pollable across their whole lifecycle. The old
+// behavior minted a fresh id per queued caller and a different one again for
+// the coalesced build — ids that never appeared in state or events.
+func TestQueuedRequestsShareStableBuildID(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	var once sync.Once
+	b.buildRunner = func(record *BuildRecord) error {
+		once.Do(func() { close(started) })
+		<-release // first build blocks; coalesced build sails through (closed)
+		return nil
+	}
+	b.restartApprover = func(ctx context.Context) (bool, []string) { return true, nil }
+
+	first, err := b.RequestRebuild(context.Background(), &RebuildRequest{
+		ProjectPath: "/test/MyGame.uproject", Mode: BuildModeFull, Label: "first", AgentID: "agent-A",
+	})
+	if err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+	<-started // first build is now in flight (and recorded as current)
+
+	second, err := b.RequestRebuild(context.Background(), &RebuildRequest{
+		ProjectPath: "/test/MyGame.uproject", Mode: BuildModeHotReload, Label: "second", AgentID: "agent-B",
+	})
+	if err != nil {
+		t.Fatalf("second request failed: %v", err)
+	}
+	third, err := b.RequestRebuild(context.Background(), &RebuildRequest{
+		ProjectPath: "/test/MyGame.uproject", Mode: BuildModeFull, Label: "third", AgentID: "agent-C",
+	})
+	if err != nil {
+		t.Fatalf("third request failed: %v", err)
+	}
+
+	if second.Status != BuildStatusPending || third.Status != BuildStatusPending {
+		t.Fatalf("queued requests should be pending, got %q / %q", second.Status, third.Status)
+	}
+	if second.ID != third.ID {
+		t.Fatalf("queued callers must share one pending id, got %q vs %q", second.ID, third.ID)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("pending id must differ from the in-flight build id %q", first.ID)
+	}
+	if len(third.Labels) != 2 || third.Labels[0] != "second" || third.Labels[1] != "third" {
+		t.Errorf("pending record should accumulate queued labels, got %v", third.Labels)
+	}
+	if third.Mode != BuildModeFull {
+		t.Errorf("full mode must win escalation, got %q", third.Mode)
+	}
+
+	// The pending id resolves while queued.
+	if p := b.PendingBuild(); p == nil || p.ID != second.ID {
+		t.Fatalf("PendingBuild should expose the queued record, got %+v", p)
+	}
+
+	close(release)
+
+	// The coalesced build must reach state under the SAME id the callers hold.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		current := state.GetCurrentBuild()
+		if current != nil && current.ID == second.ID && current.Status == BuildStatusSucceeded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("coalesced build never became current under the pending id %q; current=%+v", second.ID, current)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if p := b.PendingBuild(); p != nil {
+		t.Errorf("pending record should clear once the coalesced build starts, got %+v", p)
+	}
+	waitForOrchestratorIdle(t, b)
+}
+
+// TestPendingBuildCopyIsIsolated guards against later queue merges mutating a
+// record already returned to a caller (shared slice backing arrays).
+func TestPendingBuildCopyIsIsolated(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	b := NewBuildOrchestrator(NewInstanceManager(), state, NewAgentRegistry())
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	var once sync.Once
+	b.buildRunner = func(record *BuildRecord) error {
+		once.Do(func() { close(started) })
+		<-release
+		return nil
+	}
+	b.restartApprover = func(ctx context.Context) (bool, []string) { return true, nil }
+
+	if _, err := b.RequestRebuild(context.Background(), &RebuildRequest{
+		ProjectPath: "/test/MyGame.uproject", Mode: BuildModeFull, Label: "first", AgentID: "agent-A",
+	}); err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+	<-started
+
+	second, _ := b.RequestRebuild(context.Background(), &RebuildRequest{
+		ProjectPath: "/test/MyGame.uproject", Mode: BuildModeFull, Label: "second", AgentID: "agent-B",
+	})
+	labelsBefore := append([]string(nil), second.Labels...)
+
+	_, _ = b.RequestRebuild(context.Background(), &RebuildRequest{
+		ProjectPath: "/test/MyGame.uproject", Mode: BuildModeFull, Label: "third", AgentID: "agent-C",
+	})
+
+	if len(second.Labels) != len(labelsBefore) {
+		t.Errorf("returned record mutated by later queue merge: %v -> %v", labelsBefore, second.Labels)
+	}
+
+	close(release)
+	waitForOrchestratorIdle(t, b)
+}
