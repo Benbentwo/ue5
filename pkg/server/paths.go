@@ -12,6 +12,7 @@ const (
 	socketName           = "server.sock"
 	pidFileName          = "daemon.pid"
 	stateFileName        = "state.json"
+	instancesFileName    = "instances.json"
 	logsDirName          = "logs"
 	buildLogName         = "build.log"
 	mcpDefaultPort       = "9515"
@@ -40,6 +41,11 @@ func DaemonPIDFile() string {
 // StateFile returns the path to the state persistence file.
 func StateFile() string {
 	return filepath.Join(HomeDir(), stateFileName)
+}
+
+// InstancesFile returns the path to the instance discovery registry.
+func InstancesFile() string {
+	return filepath.Join(HomeDir(), instancesFileName)
 }
 
 // LogDir returns the log directory for a given project path.

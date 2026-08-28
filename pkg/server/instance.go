@@ -72,6 +72,11 @@ func (m *InstanceManager) StartEditor(req *StartEditorRequest) (*InstanceInfo, e
 		}
 	}
 
+	mcpPort, err := m.allocateMCPPortLocked(req.MCPPort)
+	if err != nil {
+		return nil, fmt.Errorf("cannot allocate SadTire MCP port: %w", err)
+	}
+
 	// Resolve the editor binary path
 	editorBinary := pkg.EditorBinaryPath(req.EnginePath)
 
@@ -88,8 +93,7 @@ func (m *InstanceManager) StartEditor(req *StartEditorRequest) (*InstanceInfo, e
 	logFilePath := LogFile(projectPath)
 
 	// Build command args
-	args := []string{projectPath}
-	args = append(args, req.ExtraArgs...)
+	args := buildEditorArgs(projectPath, mcpPort, req.ExtraArgs)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, editorBinary, args...)
@@ -135,6 +139,7 @@ func (m *InstanceManager) StartEditor(req *StartEditorRequest) (*InstanceInfo, e
 		State:         StateStarting,
 		StartedAt:     time.Now(),
 		LogFile:       logFilePath,
+		MCPPort:       mcpPort,
 	}
 
 	// Start the process
@@ -165,8 +170,36 @@ func (m *InstanceManager) StartEditor(req *StartEditorRequest) (*InstanceInfo, e
 	// Transition from starting -> running once startup output arrives (or timeout fallback).
 	go m.markRunningWhenReady(inst)
 
-	log.Info("Started editor process", "project", projectName, "pid", info.PID, "state", info.State, "log", logFilePath)
+	log.Info("Started editor process", "project", projectName, "pid", info.PID, "state", info.State, "mcp_port", mcpPort, "log", logFilePath)
+
+	// Notify for the new starting instance so the discovery registry lists it
+	// while the editor boots — exactly when a session is likely waiting for it.
+	// Goroutine: the callback takes daemon-side locks; don't hold m.mu across it.
+	if fn := m.onStateChange; fn != nil {
+		infoCopy := info
+		go fn(infoCopy, "", StateStarting)
+	}
+
 	return &info, nil
+}
+
+// buildEditorArgs assembles the editor command line: project path, the
+// daemon-allocated SadTire MCP port, then caller extras. A caller-supplied
+// -SadTireMCPPort in extraArgs suppresses injection (first occurrence wins
+// on the Unreal side, so injecting too would silently override the caller).
+func buildEditorArgs(projectPath string, mcpPort int, extraArgs []string) []string {
+	args := []string{projectPath}
+	inject := mcpPort != 0
+	for _, a := range extraArgs {
+		if strings.HasPrefix(a, "-SadTireMCPPort=") {
+			log.Warn("Caller-supplied -SadTireMCPPort overrides daemon allocation", "arg", a, "allocated", mcpPort)
+			inject = false
+		}
+	}
+	if inject {
+		args = append(args, fmt.Sprintf("-SadTireMCPPort=%d", mcpPort))
+	}
+	return append(args, extraArgs...)
 }
 
 // markRunningWhenReady updates instance state to running after startup output is seen.

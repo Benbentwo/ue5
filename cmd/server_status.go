@@ -78,6 +78,7 @@ var serverStatusCmd = &cobra.Command{
 				"state", inst.State,
 				"pid", inst.PID,
 				"engine", inst.EngineVersion,
+				"mcp_port", inst.MCPPort,
 				"started", inst.StartedAt.Format("15:04:05"),
 			)
 		}

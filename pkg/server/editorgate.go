@@ -22,13 +22,19 @@ import (
 // does NOT check which project those editors have open. If any such editor is
 // alive when UBT starts, the build emits libUnrealEditor-<Module>-000N patch
 // binaries instead of relinking the bases, and a subsequently restarted
-// editor silently runs stale code. The gate below guarantees no such process
-// exists before UBT is allowed to start.
+// editor silently runs stale code. builder.go neutralizes that decision by
+// passing -NoHotReloadFromIDE on every full build, so the gate below only has
+// to guarantee the OWN project's editors are dead before UBT starts (their
+// in-memory modules would still be relinked out from under them); editors
+// from other projects on the same engine are tolerated.
 const (
 	editorExitGrace    = 20 * time.Second // SIGTERM -> SIGKILL escalation point
 	editorExitTimeout  = 45 * time.Second // total budget before refusing to build
 	editorPollInterval = 500 * time.Millisecond
 )
+
+// scanEditorProcesses is the process-scan seam; swappable in tests.
+var scanEditorProcesses = findEditorProcesses
 
 // editorProc is one live UnrealEditor process found on the system.
 type editorProc struct {
@@ -88,13 +94,14 @@ func parseEditorProcesses(psOutput, editorBinary, projectPath string) (project [
 	return project, others
 }
 
-// ensureNoEditorProcesses blocks until no process running editorBinary
-// remains alive. Editors with projectPath open are terminated: SIGTERM
-// first (graceful editor shutdown, no restore prompt on relaunch), SIGKILL
-// after editorExitGrace. Editors from the same engine with a different
-// project open cannot be killed safely but still flip UBT into hot-reload
-// mode, so their presence is an error. Returns nil only when the system is
-// verifiably clear of editor processes for this engine.
+// ensureNoEditorProcesses blocks until no process running editorBinary has
+// projectPath open. Own-project editors are terminated: SIGTERM first
+// (graceful editor shutdown, no restore prompt on relaunch), SIGKILL after
+// editorExitGrace. Editors from the same engine with a DIFFERENT project
+// open are tolerated with a warning: builder.go always passes
+// -NoHotReloadFromIDE to UBT on full builds, which forces a base-binary
+// link regardless of UBT's engine-wide EditorRuns scan, so their presence
+// can no longer flip the build into emitting hot-reload patch binaries.
 func ensureNoEditorProcesses(editorBinary, projectPath string) error {
 	deadline := time.Now().Add(editorExitTimeout)
 	killAfter := time.Now().Add(editorExitGrace)
@@ -102,7 +109,7 @@ func ensureNoEditorProcesses(editorBinary, projectPath string) error {
 	sentKill := false
 
 	for {
-		project, others, err := findEditorProcesses(editorBinary, projectPath)
+		project, others, err := scanEditorProcesses(editorBinary, projectPath)
 		if err != nil {
 			return fmt.Errorf("editor process scan failed: %w", err)
 		}
@@ -118,8 +125,11 @@ func ensureNoEditorProcesses(editorBinary, projectPath string) error {
 		}
 
 		if len(project) == 0 && len(others) > 0 {
-			pids := procPIDs(others)
-			return fmt.Errorf("UnrealEditor process(es) %v from the same engine are running a different project; UBT would build hot-reload patch binaries", pids)
+			log.Warn("Other-project UnrealEditor process(es) running on this engine; -NoHotReloadFromIDE guarantees a base-binary link, proceeding", "pids", procPIDs(others))
+			if sentKill {
+				quarantinePackageRestoreData(filepath.Dir(projectPath))
+			}
+			return nil
 		}
 
 		if time.Now().After(deadline) {

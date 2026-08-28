@@ -403,7 +403,7 @@ func (w *mcpServerWrapper) registerTools() {
 			mcp.WithDescription("Stop the running editor for a project. "+
 				"Use force=true to send SIGKILL instead of a graceful shutdown."),
 			mcp.WithString("project_path", mcp.Required(),
-				mcp.Description("Absolute path to the .uproject file (must match a running instance)")),
+				mcp.Description("Path to the .uproject file, or any directory inside the project (resolved by walking up)")),
 			mcp.WithBoolean("force",
 				mcp.Description("Force-kill instead of graceful shutdown (default false)")),
 		),
@@ -414,7 +414,8 @@ func (w *mcpServerWrapper) registerTools() {
 	w.mcp.AddTool(
 		mcp.NewTool("list_instances",
 			mcp.WithDescription("List all editor instances managed by the daemon, including "+
-				"PID, state (starting/running/stopping/stopped/crashed), and log file path."),
+				"PID, state (starting/running/stopping/stopped/crashed), log file path, and "+
+				"mcp_port — the SadTire MCP TCP port dedicated to each editor."),
 		),
 		w.handleListInstances,
 	)
@@ -742,7 +743,14 @@ func (w *mcpServerWrapper) handleStopEditor(ctx context.Context, req mcp.CallToo
 	}
 	force := req.GetBool("force", false)
 
-	info, err := w.daemon.manager.StopEditor(projectPath, force)
+	// Normalize like start_editor does: accept a directory or nested path,
+	// not just the exact absolute .uproject the instance map is keyed by.
+	uprojectPath, err := resolveUprojectPath(projectPath)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	info, err := w.daemon.manager.StopEditor(uprojectPath, force)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

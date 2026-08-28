@@ -107,6 +107,7 @@ The CLI includes a Server Mode that runs a background daemon to manage Unreal Ed
 - **Build metadata**: Track accumulated features across builds, query build history
 - **Multi-agent coordination**: Multiple AI agents work concurrently with automatic build coalescing
 - **MCP integration**: Push notifications to connected AI agents via SSE (port 9515)
+- **Multi-instance editors**: Run several projects' editors at once (one editor per project). Each editor gets a dedicated SadTire MCP port from the range 55560–55660, passed via `-SadTireMCPPort=`, surfaced as `mcp_port` in `list_instances` / `/api/instances`, and published to the discovery registry `~/.ue5/instances.json` (derived data — rewritten on every instance state change, truncated on daemon start/stop; consumers verify via the SadTire `ping`'s `project_file_path`). Full rebuilds tolerate other projects' editors on the same engine (UBT gets `-NoHotReloadFromIDE`); only the rebuilt project's own editor is stopped and restarted, keeping its port.
 
 ```bash
 ue5 server start                              # Start the daemon

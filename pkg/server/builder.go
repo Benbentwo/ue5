@@ -34,6 +34,7 @@ type BuildOrchestrator struct {
 	approvalTimeout       time.Duration
 	mu                    sync.Mutex
 	building              bool
+	activeProject         string // project path of the in-progress build; guarded by mu
 	queue                 []RebuildRequest
 	pending               *BuildRecord // shared record for queued requests; guarded by mu
 	buildCapture          *LogCapture
@@ -73,6 +74,11 @@ func (b *BuildOrchestrator) RequestRebuild(ctx context.Context, req *RebuildRequ
 	}
 
 	if b.building {
+		// The queue coalesces into ONE record, so cross-project requests would
+		// silently build the wrong project. Refuse them instead.
+		if req.ProjectPath != b.activeProject {
+			return nil, fmt.Errorf("a build for %s is in progress; cross-project build queueing is not supported — retry after it completes", b.activeProject)
+		}
 		// Queue the request for coalescing
 		b.queue = append(b.queue, *req)
 		log.Info("Rebuild queued for coalescing", "label", req.Label, "agent", req.AgentID, "queue_size", len(b.queue))
@@ -107,6 +113,7 @@ func (b *BuildOrchestrator) RequestRebuild(ctx context.Context, req *RebuildRequ
 	// Start build immediately
 	record := b.createRecord([]RebuildRequest{*req})
 	b.building = true
+	b.activeProject = record.ProjectPath
 
 	go b.executeBuild(ctx, record)
 
@@ -237,6 +244,7 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 	// Check for queued requests
 	b.mu.Lock()
 	b.building = false
+	b.activeProject = ""
 	if len(b.queue) > 0 {
 		queued := b.queue
 		b.queue = nil
@@ -248,6 +256,7 @@ func (b *BuildOrchestrator) executeBuild(ctx context.Context, record *BuildRecor
 			b.pending = nil
 		}
 		b.building = true
+		b.activeProject = nextRecord.ProjectPath
 		go b.executeBuild(ctx, nextRecord)
 		log.Info("Starting coalesced build from queue", "build_id", nextRecord.ID, "coalesced_count", len(queued))
 	}
@@ -334,10 +343,13 @@ func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *Buil
 	}
 
 	// Step 2: Stop the tracked editor instance (waits for actual process
-	// exit, force-killing after 10s)
+	// exit, force-killing after 10s). Remember its SadTire MCP port so the
+	// restarted editor keeps it and connected sessions don't have to re-resolve.
+	var prevMCPPort int
 	for _, inst := range b.manager.ListInstances() {
 		if inst.ProjectPath == record.ProjectPath && (inst.State == StateRunning || inst.State == StateStarting) {
 			log.Info("Stopping editor for rebuild", "project", inst.ProjectName, "pid", inst.PID)
+			prevMCPPort = inst.MCPPort
 			if _, err := b.manager.StopEditor(inst.ProjectPath, false); err != nil {
 				log.Warn("Failed to stop editor via instance manager, relying on process gate", "error", err)
 			}
@@ -381,6 +393,7 @@ func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *Buil
 	if _, err := b.manager.StartEditor(&StartEditorRequest{
 		ProjectPath: record.ProjectPath,
 		EnginePath:  enginePath,
+		MCPPort:     prevMCPPort,
 	}); err != nil {
 		if buildErr != nil {
 			return fmt.Errorf("build failed: %w (editor restart also failed: %v)", buildErr, err)
