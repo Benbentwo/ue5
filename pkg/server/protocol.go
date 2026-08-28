@@ -39,6 +39,9 @@ type StartEditorRequest struct {
 	ProjectPath string   `json:"project_path"`
 	EnginePath  string   `json:"engine_path"`
 	ExtraArgs   []string `json:"extra_args,omitempty"`
+	// MCPPort is a preferred SadTire MCP port (0 = allocate). Used by the
+	// rebuild-restart path to keep an editor on its previous port.
+	MCPPort int `json:"mcp_port,omitempty"`
 }
 
 // StopEditorRequest contains the parameters for stopping an editor instance.
@@ -249,6 +252,8 @@ type InstanceInfo struct {
 	StartedAt     time.Time     `json:"started_at"`
 	LogFile       string        `json:"log_file"`
 	ExitCode      *int          `json:"exit_code,omitempty"`
+	// MCPPort is the SadTire MCP TCP port passed to this editor via -SadTireMCPPort.
+	MCPPort int `json:"mcp_port,omitempty"`
 }
 
 // PongResponse is returned in response to a ping request.

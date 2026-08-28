@@ -66,6 +66,12 @@ func (d *Daemon) Run() error {
 		log.Warn("Failed to load state, starting fresh", "error", err)
 	}
 
+	// Truncate the instance discovery registry: a fresh daemon tracks no
+	// instances, so any editors from a previous daemon are no longer claimed.
+	if err := WriteInstanceRegistry(nil); err != nil {
+		log.Warn("Failed to reset instance registry", "error", err)
+	}
+
 	// Wire up instance state change notifications
 	d.manager.SetStateChangeCallback(func(info InstanceInfo, oldState, newState InstanceState) {
 		d.agents.Emit(AgentEvent{
@@ -77,8 +83,12 @@ func (d *Daemon) Run() error {
 				"old_state":    string(oldState),
 				"new_state":    string(newState),
 				"pid":          info.PID,
+				"mcp_port":     info.MCPPort,
 			},
 		})
+		if err := WriteInstanceRegistry(d.manager.ListInstances()); err != nil {
+			log.Warn("Failed to write instance registry", "error", err)
+		}
 	})
 
 	// Write PID file
@@ -277,7 +287,15 @@ func (d *Daemon) handleStopEditor(conn net.Conn, req Request) {
 		return
 	}
 
-	info, err := d.manager.StopEditor(req.StopEditor.ProjectPath, req.StopEditor.Force)
+	// Normalize like the MCP handler: accept a directory or nested path,
+	// not just the exact absolute .uproject the instance map is keyed by.
+	projectPath, err := resolveUprojectPath(req.StopEditor.ProjectPath)
+	if err != nil {
+		d.sendError(conn, req.ID, err.Error())
+		return
+	}
+
+	info, err := d.manager.StopEditor(projectPath, req.StopEditor.Force)
 	if err != nil {
 		d.sendError(conn, req.ID, err.Error())
 		return
@@ -480,6 +498,11 @@ func (d *Daemon) shutdown() {
 
 	// Stop all running editor instances
 	d.manager.StopAll()
+
+	// Leave an empty registry behind — a cleanly stopped daemon claims nothing.
+	if err := WriteInstanceRegistry(nil); err != nil {
+		log.Warn("Failed to clear instance registry", "error", err)
+	}
 
 	// Close the listener to stop accepting new connections
 	if d.listener != nil {

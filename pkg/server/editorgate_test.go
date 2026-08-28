@@ -115,3 +115,17 @@ func TestEnsureNoEditorProcessesCleanSystem(t *testing.T) {
 		t.Errorf("expected clean pass, got %v", err)
 	}
 }
+
+func TestEnsureNoEditorProcessesToleratesOtherProjects(t *testing.T) {
+	// Multi-instance: other projects' editors on the same engine are tolerated
+	// (builder.go passes -NoHotReloadFromIDE on full builds), not a hard error.
+	orig := scanEditorProcesses
+	scanEditorProcesses = func(editorBinary, projectPath string) ([]editorProc, []editorProc, error) {
+		return nil, []editorProc{{PID: 12345, Args: editorBinary + " /Users/dev/OtherGame/OtherGame.uproject"}}, nil
+	}
+	defer func() { scanEditorProcesses = orig }()
+
+	if err := ensureNoEditorProcesses(testEditorBinary, testProjectPath); err != nil {
+		t.Errorf("expected other-project editors to be tolerated, got %v", err)
+	}
+}

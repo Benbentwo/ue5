@@ -99,6 +99,39 @@ func TestModeEscalation(t *testing.T) {
 	}
 }
 
+func TestCrossProjectQueueRefused(t *testing.T) {
+	state := NewStateStore()
+	state.path = filepath.Join(t.TempDir(), "state.json")
+	agents := NewAgentRegistry()
+	manager := NewInstanceManager()
+	b := NewBuildOrchestrator(manager, state, agents)
+
+	// Simulate an in-progress build for project A without spawning goroutines.
+	b.mu.Lock()
+	b.building = true
+	b.activeProject = "/test/A.uproject"
+	b.mu.Unlock()
+
+	// A request for a different project must be refused, not silently coalesced.
+	_, err := b.RequestRebuild(context.Background(), &RebuildRequest{
+		ProjectPath: "/test/B.uproject", Mode: BuildModeHotReload, Label: "B change", AgentID: "b",
+	})
+	if err == nil || !strings.Contains(err.Error(), "cross-project") {
+		t.Fatalf("expected cross-project refusal, got err=%v", err)
+	}
+
+	// A same-project request still queues normally.
+	rec, err := b.RequestRebuild(context.Background(), &RebuildRequest{
+		ProjectPath: "/test/A.uproject", Mode: BuildModeHotReload, Label: "A change", AgentID: "a",
+	})
+	if err != nil {
+		t.Fatalf("same-project queue failed: %v", err)
+	}
+	if rec == nil || rec.Status != BuildStatusPending {
+		t.Errorf("expected pending queued record, got %+v", rec)
+	}
+}
+
 func TestDefaultTargetFromProject(t *testing.T) {
 	state := NewStateStore()
 	state.path = filepath.Join(t.TempDir(), "state.json")
