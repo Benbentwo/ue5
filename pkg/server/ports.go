@@ -55,6 +55,6 @@ func portFree(port int) bool {
 	if err != nil {
 		return false
 	}
-	l.Close()
+	_ = l.Close()
 	return true
 }

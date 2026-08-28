@@ -12,7 +12,7 @@ func TestAllocateSkipsBoundPort(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot bind %d on this machine: %v", mcpPortRangeStart, err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	m := NewInstanceManager()
 	m.mu.Lock()
@@ -49,7 +49,7 @@ func TestAllocatePreferredTakenFallsThrough(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot bind %d on this machine: %v", preferred, err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	m := NewInstanceManager()
 	m.mu.Lock()

@@ -64,7 +64,7 @@ func WriteInstanceRegistry(instances []InstanceInfo) error {
 		return fmt.Errorf("failed to write instance registry: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to finalize instance registry: %w", err)
 	}
 	return nil
