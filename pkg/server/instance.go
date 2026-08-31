@@ -26,7 +26,8 @@ type ProjectInstance struct {
 	cmd     *exec.Cmd
 	cancel  context.CancelFunc
 	capture *LogCapture
-	done    chan struct{} // closed when cmd.Wait() completes
+	done    chan struct{}  // closed when cmd.Wait() completes
+	streams sync.WaitGroup // stdout/stderr readers; drained before cmd.Wait()
 	mu      sync.Mutex
 }
 
@@ -161,9 +162,17 @@ func (m *InstanceManager) StartEditor(req *StartEditorRequest) (*InstanceInfo, e
 
 	m.instances[projectPath] = inst
 
-	// Start log capture goroutines
-	go capture.CaptureStream(stdout, "stdout")
-	go capture.CaptureStream(stderr, "stderr")
+	// Start log capture goroutines. monitorProcess drains inst.streams before
+	// calling cmd.Wait(), which would otherwise close these pipes mid-read.
+	inst.streams.Add(2)
+	go func() {
+		defer inst.streams.Done()
+		capture.CaptureStream(stdout, "stdout")
+	}()
+	go func() {
+		defer inst.streams.Done()
+		capture.CaptureStream(stderr, "stderr")
+	}()
 
 	// Monitor process lifecycle — this is the sole owner of cmd.Wait()
 	go m.monitorProcess(inst)
@@ -249,6 +258,16 @@ func (m *InstanceManager) markRunningWhenReady(inst *ProjectInstance) {
 // monitorProcess waits for the editor process to exit and updates the instance state.
 // This is the sole goroutine that calls cmd.Wait() — no other code should call it.
 func (m *InstanceManager) monitorProcess(inst *ProjectInstance) {
+	// Drain the editor's stdout/stderr before Wait(). Wait closes both pipes
+	// as soon as the process exits, so waiting first races the capture
+	// goroutines and drops the tail of the log — the crash lines we most want.
+	// The pipes hit EOF on process exit, so this normally costs nothing; the
+	// bound covers a lingering grandchild still holding an inherited fd.
+	if !pkg.WaitForStreams(&inst.streams, pkg.StreamDrainTimeout) {
+		log.Warn("Timed out draining editor output; trailing log lines may be missing",
+			"project", inst.Info.ProjectName, "timeout", pkg.StreamDrainTimeout)
+	}
+
 	err := inst.cmd.Wait()
 	close(inst.done) // Signal that the process has exited
 
