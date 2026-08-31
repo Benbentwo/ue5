@@ -483,8 +483,23 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 	}
 
 	// Capture streams in background goroutines
-	go capture.CaptureStream(stdout, "stdout")
-	go capture.CaptureStream(stderr, "stderr")
+	var streams sync.WaitGroup
+	streams.Add(2)
+	go func() {
+		defer streams.Done()
+		capture.CaptureStream(stdout, "stdout")
+	}()
+	go func() {
+		defer streams.Done()
+		capture.CaptureStream(stderr, "stderr")
+	}()
+
+	// Drain the pipes before Wait(): Wait closes them the moment UBT exits, so
+	// waiting first would truncate the tail of the build log — precisely the
+	// lines that explain a failure.
+	if !pkg.WaitForStreams(&streams, pkg.StreamDrainTimeout) {
+		log.Warn("Timed out draining build output; trailing build log lines may be missing", "timeout", pkg.StreamDrainTimeout)
+	}
 
 	// Wait for build to finish
 	if err := cmd.Wait(); err != nil {

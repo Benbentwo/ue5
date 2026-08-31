@@ -133,7 +133,9 @@ func (lc *LogCapture) CaptureStream(r io.Reader, streamLabel string) {
 		lc.fanOut(event)
 	}
 
-	if err := scanner.Err(); err != nil {
+	// A closed-pipe error means the process exited and the pipe was torn down
+	// while we were still blocked in Read — normal shutdown, not a failure.
+	if err := scanner.Err(); err != nil && !pkg.IsStreamClosedErr(err) {
 		log.Error("Error reading stream", "stream", streamLabel, "error", err)
 	}
 }
