@@ -482,13 +482,42 @@ func (b *BuildOrchestrator) runBuild(record *BuildRecord) error {
 		return fmt.Errorf("failed to start build: %w", err)
 	}
 
-	// Capture streams in background goroutines
-	go capture.CaptureStream(stdout, "stdout")
-	go capture.CaptureStream(stderr, "stderr")
+	// Capture streams in background goroutines.
+	//
+	// WaitGroup, not fire-and-forget: the log is SCANNED below, and a scan that
+	// races the writers reads a truncated log. A truncated log is missing exactly
+	// the tail where UBT prints its fatal line, so the race would silently
+	// reinstate the false green this scan exists to catch.
+	var captureWG sync.WaitGroup
+	captureWG.Add(2)
+	go func() {
+		defer captureWG.Done()
+		capture.CaptureStream(stdout, "stdout")
+	}()
+	go func() {
+		defer captureWG.Done()
+		capture.CaptureStream(stderr, "stderr")
+	}()
 
 	// Wait for build to finish
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("build failed: %w", err)
+	waitErr := cmd.Wait()
+
+	// Both pipes are closed by Wait, so the capture goroutines drain and return.
+	captureWG.Wait()
+
+	if waitErr != nil {
+		return fmt.Errorf("build failed: %w", waitErr)
+	}
+
+	// The exit code said success. That is NOT sufficient evidence, because the
+	// exit code belongs to Epic's Build.sh and not to UnrealBuildTool: a UBT that
+	// segfaults can leave Build.sh exiting zero, and the daemon then reports a
+	// build that relinked nothing as succeeded. See buildlogscan.go for the
+	// incident this closes.
+	if marker, line := scanBuildLogForFatal(logPath); marker != "" {
+		log.Error("Build script exited zero but its log reports a fatal error",
+			"build_id", record.ID, "marker", marker, "line", line, "log", logPath)
+		return fatalMarkerError(marker, line)
 	}
 
 	return nil
