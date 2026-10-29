@@ -85,7 +85,7 @@ var ciJobsCmd = &cobra.Command{
 			return err
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tGAME\tKIND\tPLATFORM\tCOMMIT\tSTATE\tTIME\tNOTE")
+		_, _ = fmt.Fprintln(tw, "ID\tGAME\tKIND\tPLATFORM\tCOMMIT\tSTATE\tTIME\tNOTE")
 		for _, j := range out.Jobs {
 			note := j.Message
 			if len(j.Errors) > 0 {
@@ -94,7 +94,7 @@ var ciJobsCmd = &cobra.Command{
 			if j.Position > 0 {
 				note = fmt.Sprintf("#%d in line %s", j.Position, note)
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.Game, j.Kind, j.Platform, j.SHA[:9], j.State,
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.Game, j.Kind, j.Platform, j.SHA[:9], j.State,
 				(time.Duration(j.DurationSec) * time.Second).String(), truncate(note, 80))
 		}
 		return tw.Flush()
@@ -146,7 +146,7 @@ func ciDo(req *http.Request, out any) error {
 	if err != nil {
 		return fmt.Errorf("the build service at %s did not answer (is the ue5 daemon running?): %w", ciURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode/100 != 2 {
 		var e struct{ Error string }

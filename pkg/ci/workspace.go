@@ -50,10 +50,10 @@ func (w Workspace) Sync(ctx context.Context, j *Job, log io.Writer) error {
 }
 
 func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, submodules bool, log io.Writer) error {
-	fmt.Fprintf(log, "=== sync %s -> %s\n", dir, sha)
+	_, _ = fmt.Fprintf(log, "=== sync %s -> %s\n", dir, sha)
 	git := func(args ...string) error { return w.git(ctx, dir, log, args...) }
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-		fmt.Fprintln(log, "  no checkout yet; initialising (the first sync fetches the whole LFS set and is slow)")
+		_, _ = fmt.Fprintln(log, "  no checkout yet; initialising (the first sync fetches the whole LFS set and is slow)")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
@@ -115,7 +115,7 @@ func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, su
 	// Copy-on-write clones of the LFS objects; space only, so never fatal.
 	if w.git(ctx, dir, io.Discard, "lfs", "dedup", "--test") == nil {
 		if err := git("lfs", "dedup"); err != nil {
-			fmt.Fprintf(log, "  warning: git lfs dedup failed in %s (the checkout is still correct): %v\n", dir, err)
+			_, _ = fmt.Fprintf(log, "  warning: git lfs dedup failed in %s (the checkout is still correct): %v\n", dir, err)
 		}
 	}
 	return nil
@@ -161,7 +161,7 @@ func (w Workspace) prefix(args []string) []string {
 func cleanRepoURL(raw string) string {
 	if i := strings.Index(raw, "://"); i >= 0 {
 		rest := raw[i+3:]
-		if at := strings.Index(rest, "@"); at >= 0 && (strings.Index(rest, "/") < 0 || at < strings.Index(rest, "/")) {
+		if at := strings.Index(rest, "@"); at >= 0 && (!strings.Contains(rest, "/") || at < strings.Index(rest, "/")) {
 			return raw[:i+3] + rest[at+1:]
 		}
 	}

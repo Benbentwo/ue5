@@ -138,7 +138,7 @@ func (h *Handler) log(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Log-Size", "0")
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	fi, _ := f.Stat()
 	size := fi.Size()
 	offset, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)

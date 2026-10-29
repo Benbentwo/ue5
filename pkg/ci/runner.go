@@ -180,8 +180,8 @@ func (s *Service) run(parent context.Context, j *Job) {
 		s.finish(parent, j, StateFailed, nil, "cannot write the log: "+err.Error(), nil)
 		return
 	}
-	defer logFile.Close()
-	fmt.Fprintf(logFile, "ue5 ci job %s on %s: %s %s %s at %s (from %s)\n", j.ID, j.Box, j.Game, j.Kind, j.Platform, j.SHA, j.Source)
+	defer func() { _ = logFile.Close() }()
+	_, _ = fmt.Fprintf(logFile, "ue5 ci job %s on %s: %s %s %s at %s (from %s)\n", j.ID, j.Box, j.Game, j.Kind, j.Platform, j.SHA, j.Source)
 
 	state, exit, msg := s.execute(ctx, j, logFile, artifacts)
 	if parent.Err() != nil {
@@ -211,20 +211,20 @@ func (s *Service) execute(ctx context.Context, j *Job, log *os.File, artifacts s
 		syncFn = s.Workspace.Sync
 	}
 	if err := syncFn(ctx, j, log); err != nil {
-		fmt.Fprintf(log, "ERROR: %v\n", err)
+		_, _ = fmt.Fprintf(log, "ERROR: %v\n", err)
 		return StateFailed, nil, err.Error()
 	}
 	gameDir := s.Workspace.GameDir(j.Game)
 	script := filepath.Join(gameDir, "ci", string(j.Kind)+recipeExt)
 	if _, err := os.Stat(script); err != nil {
 		msg := fmt.Sprintf("%s has no recipe ci/%s%s at %s", j.Game, j.Kind, recipeExt, short(j.SHA))
-		fmt.Fprintln(log, "ERROR: "+msg)
+		_, _ = fmt.Fprintln(log, "ERROR: "+msg)
 		return StateFailed, nil, msg
 	}
 	if err := os.MkdirAll(artifacts, 0o755); err != nil {
 		return StateFailed, nil, err.Error()
 	}
-	fmt.Fprintf(log, "=== recipe %s\n", script)
+	_, _ = fmt.Fprintf(log, "=== recipe %s\n", script)
 	cmd := recipeCommand(ctx, script)
 	cmd.Dir = gameDir
 	cmd.Stdout, cmd.Stderr = log, log
@@ -328,7 +328,7 @@ func ExtractErrors(path string, max int) []string {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	seen := map[string]bool{}
 	var out []string
 	sc := bufio.NewScanner(f)

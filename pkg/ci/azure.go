@@ -125,7 +125,7 @@ func (r *Reporter) Report(ctx context.Context, j *Job) {
 		r.errorf("commit status for %s: %v", j.ID, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		r.errorf("commit status for %s: HTTP %d: %s", j.ID, resp.StatusCode, strings.TrimSpace(string(msg)))
