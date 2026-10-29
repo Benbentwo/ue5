@@ -47,7 +47,7 @@ developer laptop running the daemon for editor management never takes builds.
 | `keep_artifacts` | `3` | Packaged builds kept per game. |
 | `disk_floor_gb` | `50` | Below this the queue **holds** (it does not fail every job). |
 | `reclaim_command` | none | Run once an hour while below the floor, e.g. `["/bin/bash", "/Users/me/reclaim.sh"]`. |
-| `public_url` | `http://<host>.local:9516` | Used in commit-status links. |
+| `public_url` | `http://<LocalHostName>.local:9516` | Used in commit-status links. Set it (e.g. to the box's IP) if `.local` names do not resolve on your network. |
 | `peers` | none | Other boxes' dashboards, shown together. |
 | `timeout_minutes` | compile 180, package 480, steam 120 | Per kind. |
 
@@ -90,6 +90,26 @@ Retry.
   never waits behind a nightly cook.
 - **Disk floor holds the queue**, with the reason shown on the waiting job.
 - **A daemon restart mid-build** marks that job `interrupted` and queues a retry.
+
+## Sharing the workspace with other tools
+
+While a box moves over, CI agent jobs may still build the old way in the same
+`work_root`. Two writers syncing one checkout corrupt it, so the service takes
+`<work_root>/.workspace-lock/` for each job and **waits** (the job shows
+"waiting for the workspace: in use by …") while anything else holds it. A
+holder is a process id; a lock whose process has exited is stale and taken over.
+To take part from a shell step, take the lock before touching the checkouts and
+name a process that lives as long as your work (for an Azure job, the
+`Agent.Worker` process), so the lock frees itself when the job ends:
+
+```bash
+lock="$WORK_ROOT/.workspace-lock"
+until mkdir "$lock" 2>/dev/null; do
+  pid=$(sed -n 's/^pid=//p' "$lock/owner" 2>/dev/null)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then sleep 30; else rm -rf "$lock"; fi
+done
+printf 'pid=%s\nwho=%s\n' "$HOLDER_PID" "my job" > "$lock/owner"
+```
 
 ## Recipes (in each game repo)
 

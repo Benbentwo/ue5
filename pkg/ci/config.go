@@ -65,8 +65,7 @@ func LoadConfig(home string) (Config, error) {
 }
 
 func (c *Config) fill() {
-	host, _ := os.Hostname()
-	host = strings.TrimSuffix(host, ".local")
+	host := localHostName()
 	if c.Box == "" {
 		c.Box = host
 	}
@@ -161,4 +160,22 @@ func Secret(home, name string) string {
 		return strings.TrimSpace(string(b))
 	}
 	return ""
+}
+
+// localHostName is the name other machines on the LAN reach this one by
+// (<name>.local via Bonjour/mDNS). On macOS that is LocalHostName, which can
+// differ from os.Hostname (e.g. "Mac.localdomain" from DHCP).
+func localHostName() string {
+	if runtime.GOOS == "darwin" {
+		if out, err := exec.Command("scutil", "--get", "LocalHostName").Output(); err == nil {
+			if h := strings.TrimSpace(string(out)); h != "" {
+				return h
+			}
+		}
+	}
+	host, _ := os.Hostname()
+	for _, suffix := range []string{".local", ".localdomain", ".lan", ".home"} {
+		host = strings.TrimSuffix(host, suffix)
+	}
+	return host
 }
