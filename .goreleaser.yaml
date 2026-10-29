@@ -19,6 +19,8 @@ builds:
 changelog:
   sort: asc
   use: github
+  # Short SHA and subject only: no author names or emails in public release notes.
+  format: "{{ .SHA }}: {{ .Message }}"
   filters:
     exclude:
       - "^docs:"
