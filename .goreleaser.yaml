@@ -1,0 +1,46 @@
+# This is an example .goreleaser.yml file with some sensible defaults.
+# Make sure to check the documentation at https://goreleaser.com
+version: 2
+before:
+  hooks:
+    - go mod tidy
+    - bash -c "cd dashboard && npm ci && npm run build"
+    - bash -c "rm -rf pkg/server/dashboard_dist && cp -r dashboard/dist pkg/server/dashboard_dist"
+
+builds:
+  - env: ["CGO_ENABLED=0"]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags: ["-trimpath"]
+    tags: ["embed_dashboard"]
+    ldflags:
+      - "-X github.com/Benbentwo/ue5/cmd.Version={{ .Version }}"
+    targets: ["go_first_class"]
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore"
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+      - go mod tidy
+  groups:
+    - title: "New Features"
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: "Bug fixes"
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 10
+    - title: Other work
+      order: 999
+
+release:
+  footer: |
+
+    ---
+
+    _Released with [GoReleaser](https://goreleaser.com)!_
