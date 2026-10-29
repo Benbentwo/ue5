@@ -144,22 +144,33 @@ func DispatchToken(home string) (string, error) {
 // file only its owner can read; the Windows fallback until Credential Manager
 // support lands). Empty means not configured.
 func Secret(home, name string) string {
+	v, _ := SecretWithSource(home, name)
+	return v
+}
+
+// SecretWithSource is Secret plus where the value came from ("env
+// UE5_CI_AZURE_PAT", "macOS Keychain", a file path, or "" when not found), so
+// `ue5 ci doctor` can say which copy is in use without ever printing it.
+func SecretWithSource(home, name string) (string, string) {
 	env := "UE5_CI_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	if v := strings.TrimSpace(os.Getenv(env)); v != "" {
-		return v
+		return v, "env " + env
 	}
 	if runtime.GOOS == "darwin" {
 		out, err := exec.Command("security", "find-generic-password", "-s", "ue5-ci", "-a", name, "-w").Output()
 		if err == nil {
 			if v := strings.TrimSpace(string(out)); v != "" {
-				return v
+				return v, "macOS Keychain (service ue5-ci, account " + name + ")"
 			}
 		}
 	}
-	if b, err := os.ReadFile(filepath.Join(Dir(home), "secrets", name)); err == nil {
-		return strings.TrimSpace(string(b))
+	path := filepath.Join(Dir(home), "secrets", name)
+	if b, err := os.ReadFile(path); err == nil {
+		if v := strings.TrimSpace(string(b)); v != "" {
+			return v, path
+		}
 	}
-	return ""
+	return "", ""
 }
 
 // localHostName is the name other machines on the LAN reach this one by

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -71,6 +72,26 @@ type Reporter struct {
 	Client    *http.Client
 	// Errorf receives failures; reporting is best effort and never fails a job.
 	Errorf func(format string, args ...any)
+
+	mu      sync.Mutex
+	lastErr string
+	lastAt  time.Time
+}
+
+// LastError is the most recent reporting failure ("" once a post succeeds).
+func (r *Reporter) LastError() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastErr
+}
+
+func (r *Reporter) setErr(msg string) {
+	r.mu.Lock()
+	r.lastErr, r.lastAt = msg, time.Now()
+	r.mu.Unlock()
 }
 
 // azureState maps job states onto Azure's GitStatusState.
@@ -126,10 +147,64 @@ func (r *Reporter) Report(ctx context.Context, j *Job) {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if err := azureResponseError(resp); err != nil {
+		r.setErr("commit status: " + err.Error())
+		r.errorf("commit status for %s: %v", j.ID, err)
+		return
+	}
+	r.setErr("")
+}
+
+// azureResponseError turns an Azure DevOps reply into an error. Azure answers a
+// PAT it does not accept with 203 and an HTML sign-in page, not 401, so a 2xx
+// alone is not success.
+func azureResponseError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusNonAuthoritativeInfo || resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("HTTP %d: Azure DevOps did not accept the PAT (expired, revoked, wrong organization, or missing the Code scope)", resp.StatusCode)
+	}
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		r.errorf("commit status for %s: HTTP %d: %s", j.ID, resp.StatusCode, strings.TrimSpace(string(msg)))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
+	return nil
+}
+
+// CheckAuth asks the organization at base (https://dev.azure.com/<org>) who
+// the PAT belongs to. It returns that identity's display name.
+func CheckAuth(ctx context.Context, client *http.Client, base, pat string) (string, error) {
+	if pat == "" {
+		return "", fmt.Errorf("no azure-pat secret is configured")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/_apis/connectionData", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(":"+pat)))
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := azureResponseError(resp); err != nil {
+		return "", err
+	}
+	var body struct {
+		AuthenticatedUser struct {
+			ProviderDisplayName string `json:"providerDisplayName"`
+		} `json:"authenticatedUser"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return "", fmt.Errorf("unexpected reply from %s: %v", base, err)
+	}
+	name := body.AuthenticatedUser.ProviderDisplayName
+	if name == "" || strings.EqualFold(name, "Anonymous") {
+		return "", fmt.Errorf("the organization treated the PAT as anonymous (not accepted)")
+	}
+	return name, nil
 }
 
 func (r *Reporter) errorf(format string, args ...any) {

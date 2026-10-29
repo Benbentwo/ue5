@@ -12,7 +12,7 @@ import (
 
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-c", "user.email=ci@test", "-c", "user.name=ci", "-c", "init.defaultBranch=main"}, args...)...)
+	cmd := exec.Command("git", append([]string{"-c", "user.email=ci@test", "-c", "user.name=ci", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

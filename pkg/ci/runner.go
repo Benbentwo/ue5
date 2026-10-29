@@ -233,8 +233,16 @@ func (s *Service) execute(ctx context.Context, j *Job, log *os.File, artifacts s
 		syncFn = s.Workspace.Sync
 	}
 	if err := syncFn(ctx, j, log); err != nil {
-		_, _ = fmt.Fprintf(log, "ERROR: %v\n", err)
-		return StateFailed, nil, err.Error()
+		msg := err.Error()
+		if b, rerr := os.ReadFile(log.Name()); rerr == nil && authFailure(string(b)) {
+			if s.Workspace.PAT == "" {
+				msg = "git could not authenticate and no azure-pat secret is configured on " + j.Box + " (run `ue5 ci doctor` there)"
+			} else {
+				msg = "Azure rejected " + j.Box + "'s azure-pat for git (" + msg + "); run `ue5 ci doctor` there"
+			}
+		}
+		_, _ = fmt.Fprintf(log, "ERROR: %s\n", msg)
+		return StateFailed, nil, msg
 	}
 	gameDir := s.Workspace.GameDir(j.Game)
 	script := filepath.Join(gameDir, "ci", string(j.Kind)+recipeExt)

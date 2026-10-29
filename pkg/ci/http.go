@@ -55,7 +55,9 @@ type StatusView struct {
 	WorkRoot    string   `json:"work_root"`
 	Peers       []string `json:"peers"`
 	Reporting   bool     `json:"reporting"` // an Azure PAT is configured
-	Now         string   `json:"now"`
+	// ReportError is the last commit-status failure, e.g. a PAT Azure rejects.
+	ReportError string `json:"report_error,omitempty"`
+	Now         string `json:"now"`
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +71,7 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		Box: s.Config.Box, Enabled: s.Config.Enabled, PublicURL: s.Config.PublicURL,
 		Running: s.Running(), Queued: len(s.Queue.Queued()), FreeGB: free,
 		DiskFloorGB: s.Config.DiskFloorGB, WorkRoot: s.Config.WorkRoot, Peers: peers,
-		Reporting: s.Reporter != nil && s.Reporter.PAT != "", Now: time.Now().UTC().Format(time.RFC3339),
+		Reporting: s.Reporter != nil && s.Reporter.PAT != "", ReportError: s.Reporter.LastError(), Now: time.Now().UTC().Format(time.RFC3339),
 	})
 }
 

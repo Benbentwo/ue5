@@ -69,6 +69,14 @@ fallback until Credential Manager support lands).
 security add-generic-password -s ue5-ci -a azure-pat -w '<PAT>'
 ```
 
+Check a box's credentials with `ue5 ci doctor --repo <azure repo url>`: it says
+which copy of the PAT is in use (never its value), whether the organization
+accepts it, and whether git can read with it. Azure answers a PAT it rejects with
+HTTP 203 (a sign-in page), so the dashboard also shows the last reporting error.
+Replace a stored PAT with `security add-generic-password -U -s ue5-ci -a azure-pat -w '<PAT>'`
+and restart the daemon. Git runs non-interactively, so a bad credential fails the
+job with a clear message instead of trying to prompt.
+
 Without a PAT the service still builds (using the user's own git credentials)
 but posts no commit statuses; the dashboard says so.
 

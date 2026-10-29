@@ -130,16 +130,21 @@ func (w Workspace) gitEnv(ctx context.Context, dir string, log io.Writer, env []
 	cmd.Dir = dir
 	cmd.Stdout = log
 	cmd.Stderr = log
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(append(os.Environ(), noPrompt...), env...)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git %s: %w", args[0], err)
 	}
 	return nil
 }
 
+// noPrompt makes every git call fail fast instead of asking for a username: the
+// daemon has no terminal ("could not read Username ...: Device not configured").
+var noPrompt = []string{"GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never", "GIT_ASKPASS=", "SSH_ASKPASS="}
+
 func (w Workspace) output(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", w.prefix(args)...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), noPrompt...)
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
 }
@@ -150,6 +155,8 @@ func (w Workspace) output(ctx context.Context, dir string, args ...string) (stri
 func (w Workspace) prefix(args []string) []string {
 	out := []string{"-c", "safe.directory=*"}
 	if w.PAT != "" {
+		// The header is the only credential: no helper may answer (or prompt) instead.
+		out = append(out, "-c", "credential.helper=")
 		tok := base64.StdEncoding.EncodeToString([]byte(":" + w.PAT))
 		out = append(out, "-c", "http.extraheader=AUTHORIZATION: Basic "+tok)
 	}
@@ -166,4 +173,24 @@ func cleanRepoURL(raw string) string {
 		}
 	}
 	return raw
+}
+
+// authFailure reports whether a git log tail looks like a rejected credential.
+func authFailure(log string) bool {
+	l := strings.ToLower(log)
+	for _, s := range []string{"could not read username", "authentication failed", "terminal prompts disabled", "http basic: access denied", "returned error: 401", "returned error: 203"} {
+		if strings.Contains(l, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// LsRemote reads a repository's HEAD the way Sync authenticates, without a
+// checkout: `ue5 ci doctor` uses it to prove the credentials.
+func (w Workspace) LsRemote(ctx context.Context, repo string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", w.prefix([]string{"ls-remote", cleanRepoURL(repo), "HEAD"})...)
+	cmd.Env = append(os.Environ(), noPrompt...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }

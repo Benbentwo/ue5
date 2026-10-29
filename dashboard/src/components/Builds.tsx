@@ -48,6 +48,7 @@ interface CIStatus {
   work_root: string
   peers: string[]
   reporting: boolean
+  report_error?: string
   now: string
 }
 
@@ -177,6 +178,11 @@ function BoxCard({ box }: { box: BoxData }) {
           {s.reporting ? 'reports to Azure' : 'no Azure PAT: not reporting'}
         </span>
       </div>
+      {s.report_error && (
+        <div className="mt-2 text-xs text-red-400">
+          Azure reporting is failing: {s.report_error}. Run <code>ue5 ci doctor</code> on {s.box}.
+        </div>
+      )}
     </div>
   )
 }
