@@ -107,7 +107,7 @@ func scanBuildLogForFatal(path string) (marker string, line string) {
 	if err != nil {
 		return "", ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {

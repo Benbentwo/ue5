@@ -1,0 +1,147 @@
+# Build service (`ue5 ci`)
+
+The build service runs inside the ue5 daemon on a **build box**: a machine that
+also runs a self-hosted Azure Pipelines agent (or any other CI agent). A pipeline
+job hands a build to the box's own daemon with one local HTTP call and finishes
+in seconds, so a limited pool of parallel jobs (the free tier allows one) is
+never held by a multi-hour cook, and several boxes build at the same time. The daemon
+queues the build, syncs the checkout, runs the game repo's recipe, and reports
+the result:
+
+- as a **commit status** on Azure Repos (`ue5-ci/<kind>-<platform>`: pending →
+  succeeded / failed), linking to the build's page;
+- on the **dashboard**, `http://<box>.local:9516/#/ci`, which also shows every
+  peer box on the same page.
+
+```
+Azure job (seconds)            build box
+──────────────────             ─────────────────────────────────────────────
+checkout: none
+ue5 ci dispatch ... ──POST──▶  queue ─▶ sync repos ─▶ <game>/ci/<kind>.sh|.ps1
+job ends green ("dispatched")           │                    │
+                                        └── commit status ◀──┴── build.json, log, errors
+```
+
+## Turning a box on
+
+The service is **off** unless `~/.ue5/ci/config.json` says otherwise, so a
+developer laptop running the daemon for editor management never takes builds.
+
+```json
+{
+  "enabled": true,
+  "box": "build-mac",
+  "work_root": "~/ue5-ci/work",
+  "disk_floor_gb": 50,
+  "peers": ["http://build-win.local:9516"]
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Take builds. |
+| `box` | hostname | Name on the dashboard and in commit statuses. |
+| `work_root` | `~/ue5-ci/work` | One checkout per repo: `<root>/<Game>`, `<root>/<plugins_dir>/<Name>`. Point it at an existing checkout root to reuse what is already downloaded. |
+| `plugins_dir` | `Shared/Plugins` | Where pinned plugin repos go, relative to `work_root`. Matches a `.uproject` with `"AdditionalPluginDirectories": ["../Shared/Plugins"]`. |
+| `artifact_root` | `<work_root>/_artifacts` | Each job's package goes to `<artifact_root>/<Game>/<job id>/`. |
+| `keep_artifacts` | `3` | Packaged builds kept per game. |
+| `disk_floor_gb` | `50` | Below this the queue **holds** (it does not fail every job). |
+| `reclaim_command` | none | Run once an hour while below the floor, e.g. `["/bin/bash", "/Users/me/reclaim.sh"]`. |
+| `public_url` | `http://<host>.local:9516` | Used in commit-status links. |
+| `peers` | none | Other boxes' dashboards, shown together. |
+| `timeout_minutes` | compile 180, package 480, steam 120 | Per kind. |
+
+Restart the daemon after editing (`ue5 server stop`; it auto-starts on the next
+`ue5` command, or at login via autostart).
+
+### Secrets
+
+Secrets never travel with a dispatch. The service looks each one up in order:
+environment `UE5_CI_<NAME>`, the macOS Keychain (service `ue5-ci`), then
+`~/.ue5/ci/secrets/<name>` (a file only its owner can read; the Windows
+fallback until Credential Manager support lands).
+
+| Name | Used for |
+|---|---|
+| `azure-pat` | Git fetches and commit statuses. Scopes: **Code (Read & write)** — status posting needs write. |
+
+```bash
+security add-generic-password -s ue5-ci -a azure-pat -w '<PAT>'
+```
+
+Without a PAT the service still builds (using the user's own git credentials)
+but posts no commit statuses; the dashboard says so.
+
+### Dispatch token
+
+`~/.ue5/ci/token` is created (mode 0600) on first start. Reads of the API are
+open to the LAN; **dispatch, cancel and retry need the token**. The Azure agent
+runs as the same user as the daemon, so it can read the token and another device
+on the network cannot. The dashboard asks for it once (paste it) before Cancel /
+Retry.
+
+## Queue rules
+
+- **One heavy build per box.** One UE compile or cook uses every core, and every
+  game on the box shares one plugins checkout.
+- **Newest commit wins.** One queued job per game + kind + platform; a newer
+  dispatch marks the older one `superseded`. A running build always finishes.
+- **Compile before package before steam**, oldest first within a kind, so a push
+  never waits behind a nightly cook.
+- **Disk floor holds the queue**, with the reason shown on the waiting job.
+- **A daemon restart mid-build** marks that job `interrupted` and queues a retry.
+
+## Recipes (in each game repo)
+
+The service knows nothing game-specific. It runs `ci/<kind>.sh` (macOS/Linux,
+under bash) or `ci/<kind>.ps1` (Windows) from the game checkout at the job's
+commit, so build steps change in the same commit as the game and an old commit
+rebuilds with its own steps. A missing recipe fails the job by name.
+
+Working directory: the game checkout. Exit 0 = succeeded. Environment:
+
+| Variable | Value |
+|---|---|
+| `UE5_CI` | `1` |
+| `UE5_CI_JOB_ID`, `UE5_CI_BOX` | job id, box name |
+| `UE5_CI_GAME`, `UE5_CI_KIND`, `UE5_CI_PLATFORM` | from the dispatch |
+| `UE5_CI_SHA`, `UE5_CI_BRANCH`, `UE5_CI_SOURCE` | commit, branch, who asked |
+| `UE5_CI_ENGINE_ASSOCIATION` | the `.uproject`'s `EngineAssociation`, when found |
+| `GAME_ROOT` | the game checkout (physical path) |
+| `SHARED_ROOT` | the parent of the plugins dir, e.g. `<work_root>/Shared` |
+| `ARTIFACT_DIR` | put packaged output here; `build.json` is written beside it |
+
+Failed builds get their key error lines (compiler/UBT errors, `ERROR:`, test
+`FAIL`, Python tracebacks, `No space left on device`, ...) pulled out for the
+dashboard and the commit status.
+
+## Dispatching
+
+```bash
+ue5 ci dispatch --game MyGame --kind compile --platform Mac \
+  --repo "$(Build.Repository.Uri)" --sha "$(Build.SourceVersion)" \
+  --branch "$(Build.SourceBranch)" \
+  --plugin SharedPlugins=https://dev.azure.com/MyOrg/MyProject/_git/SharedPlugins@$PLUGINS_SHA \
+  --source "azure:$(Build.BuildId)"
+```
+
+It fails (non-zero) at once if the daemon is not answering, the box is off, or
+the request is malformed, so the dispatching pipeline run goes red.
+
+```bash
+ue5 ci jobs [--game X] [--limit N]
+ue5 ci cancel <job-id>
+ue5 ci retry <job-id>
+```
+
+### API
+
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/api/ci/status` | open |
+| GET | `/api/ci/jobs?limit=&game=` | open |
+| GET | `/api/ci/jobs/{id}` | open |
+| GET | `/api/ci/jobs/{id}/log?offset=N` or `?tail=N` | open (`X-Log-Size` header carries the length) |
+| POST | `/api/ci/jobs` | token |
+| POST | `/api/ci/jobs/{id}/cancel` | token |
+| POST | `/api/ci/jobs/{id}/retry` | token |
