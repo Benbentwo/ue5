@@ -182,3 +182,61 @@ func init() {
 	ciJobsCmd.Flags().StringVar(&ciJobsGame, "game", "", "only this game")
 	ciCmd.AddCommand(ciDispatchCmd, ciJobsCmd, ciCancelCmd, ciRetryCmd)
 }
+
+var ciDoctorRepo string
+
+var ciDoctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Check this box's build-service credentials against Azure DevOps",
+	Long: `Reports where the azure-pat secret comes from (never its value), whether Azure
+DevOps accepts it, and whether git can read a repository with it the way the
+build service does. Run it on the build box, as the user the daemon runs as.`,
+	Example: `  ue5 ci doctor --repo https://dev.azure.com/MyOrg/MyProject/_git/MyGame`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		home := server.HomeDir()
+		pat, src := ci.SecretWithSource(home, "azure-pat")
+		ok := true
+		if pat == "" {
+			fmt.Println("azure-pat: NOT FOUND (env UE5_CI_AZURE_PAT, Keychain service ue5-ci / account azure-pat, or ~/.ue5/ci/secrets/azure-pat)")
+			return fmt.Errorf("no azure-pat secret")
+		}
+		fmt.Printf("azure-pat: found in %s (%d characters)\n", src, len(pat))
+		if strings.ContainsAny(pat, " '\"\t") {
+			fmt.Println("  warning: the value contains spaces or quotes; it was probably stored with extra characters")
+		}
+		repo := ciDoctorRepo
+		if repo == "" {
+			fmt.Println("(pass --repo <azure repo url> to also test the organization and a git read)")
+			return nil
+		}
+		az, isAzure := ci.ParseAzureRepo(repo)
+		if !isAzure {
+			return fmt.Errorf("%s is not an Azure Repos URL", repo)
+		}
+		if who, err := ci.CheckAuth(cmd.Context(), nil, az.Base, pat); err != nil {
+			ok = false
+			fmt.Printf("organization %s: REJECTED: %v\n", az.Base, err)
+		} else {
+			fmt.Printf("organization %s: accepted (signed in as %s)\n", az.Base, who)
+		}
+		w := ci.Workspace{PAT: pat}
+		if out, err := w.LsRemote(cmd.Context(), repo); err != nil {
+			ok = false
+			fmt.Printf("git read %s: FAILED: %v\n%s\n", repo, err, strings.TrimSpace(out))
+		} else {
+			fmt.Printf("git read %s: ok (%s)\n", repo, strings.TrimSpace(out))
+		}
+		if !ok {
+			fmt.Println("\nFix: create a PAT in that organization with Code (Read & write), then store it with:")
+			fmt.Println("  security add-generic-password -U -s ue5-ci -a azure-pat -w '<PAT>'   # macOS (-U replaces)")
+			fmt.Println("and restart the daemon: ue5 server stop && ue5 ci jobs")
+			return fmt.Errorf("credentials not working")
+		}
+		return nil
+	},
+}
+
+func init() {
+	ciDoctorCmd.Flags().StringVar(&ciDoctorRepo, "repo", "", "an Azure Repos URL to test a git read against")
+	ciCmd.AddCommand(ciDoctorCmd)
+}

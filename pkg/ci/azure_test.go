@@ -101,3 +101,47 @@ func (t rewrite) RoundTrip(r *http.Request) (*http.Response, error) {
 	r2.Host = base
 	return http.DefaultTransport.RoundTrip(r2)
 }
+
+func TestAzureSignInPageIsARejection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNonAuthoritativeInfo) // what Azure sends for a PAT it does not accept
+		_, _ = w.Write([]byte("<html>sign in</html>"))
+	}))
+	defer srv.Close()
+	rep := &Reporter{PAT: "bad", Client: &http.Client{Transport: rewrite(srv.URL)}}
+	rep.Report(context.Background(), &Job{ID: "j", State: StateFailed,
+		Request: Request{Repo: "https://dev.azure.com/O/P/_git/R", SHA: sha('a'), Kind: KindCompile, Platform: "Mac"}})
+	if !strings.Contains(rep.LastError(), "did not accept the PAT") {
+		t.Fatalf("a 203 must be reported as a rejected PAT, got %q", rep.LastError())
+	}
+	if _, err := CheckAuth(context.Background(), &http.Client{Transport: rewrite(srv.URL)}, "https://dev.azure.com/O", "bad"); err == nil {
+		t.Fatal("CheckAuth must reject a 203")
+	}
+}
+
+func TestCheckAuthAccepts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"authenticatedUser":{"providerDisplayName":"Build Bot"}}`))
+	}))
+	defer srv.Close()
+	who, err := CheckAuth(context.Background(), &http.Client{Transport: rewrite(srv.URL)}, "https://dev.azure.com/O", "good")
+	if err != nil || who != "Build Bot" {
+		t.Fatalf("got %q %v", who, err)
+	}
+}
+
+func TestAuthFailureMatchesGitPromptErrors(t *testing.T) {
+	for _, l := range []string{
+		"fatal: could not read Username for 'https://dev.azure.com': Device not configured",
+		"fatal: could not read Username for 'https://dev.azure.com': terminal prompts disabled",
+		"remote: TF401019 ... fatal: Authentication failed for 'https://dev.azure.com/O/P/_git/R/'",
+	} {
+		if !authFailure(l) {
+			t.Errorf("not recognised: %s", l)
+		}
+	}
+	if authFailure("fatal: couldn't find remote ref deadbeef") {
+		t.Error("a missing ref is not an auth failure")
+	}
+}
