@@ -111,7 +111,10 @@ func (s *Service) Run(ctx context.Context) {
 		for {
 			hold := ""
 			if len(s.Queue.Queued()) > 0 {
-				hold = s.diskHold()
+				hold = s.workspaceHold()
+				if hold == "" {
+					hold = s.diskHold()
+				}
 			}
 			j, ok := s.Queue.Next(hold)
 			if !ok {
@@ -129,6 +132,15 @@ func (s *Service) Run(ctx context.Context) {
 		case <-tick.C:
 		}
 	}
+}
+
+// workspaceHold keeps the queue waiting while another tool holds the
+// workspace lock (see LockDirName), so two writers never sync one checkout.
+func (s *Service) workspaceHold() string {
+	if o := ReadLock(s.Config.WorkRoot); o != nil {
+		return "waiting for the workspace: in use by " + o.Who
+	}
+	return ""
 }
 
 // diskHold keeps the queue waiting while the disk is below the floor, running
@@ -173,6 +185,16 @@ func (s *Service) run(parent context.Context, j *Job) {
 		s.running, s.cancelRun = nil, nil
 		s.mu.Unlock()
 	}()
+
+	release, err := AcquireLock(s.Config.WorkRoot, "ue5 ci job "+j.ID+" ("+j.Game+" "+string(j.Kind)+")")
+	if err != nil {
+		// Someone took the workspace between the hold check and now: wait again.
+		_, _ = s.Queue.Update(j.ID, func(x *Job) {
+			x.State, x.StartedAt, x.Message = StateQueued, nil, "waiting for the workspace: "+err.Error()
+		})
+		return
+	}
+	defer release()
 
 	s.Reporter.Report(parent, j)
 	logFile, err := os.Create(logPath)

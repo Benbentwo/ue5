@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -208,5 +209,33 @@ func TestDispatchRefusedWhenDisabled(t *testing.T) {
 	resp, _ := http.DefaultClient.Do(r)
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("disabled box accepted a job: %d", resp.StatusCode)
+	}
+}
+
+func TestWorkspaceLockHoldsTheQueue(t *testing.T) {
+	s := newTestService(t, "#!/bin/bash\necho built\n")
+	// Another tool (a CI agent job) holds the workspace with a live process.
+	dir := filepath.Join(s.Config.WorkRoot, LockDirName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "owner"), []byte(fmt.Sprintf("pid=%d\nwho=azure build 1700\n", os.Getpid())), 0o644)
+	if why := s.workspaceHold(); !strings.Contains(why, "azure build 1700") {
+		t.Fatalf("hold %q", why)
+	}
+	if _, err := AcquireLock(s.Config.WorkRoot, "me"); err == nil {
+		t.Fatal("a live holder must keep the lock")
+	}
+	// Its process is gone: the lock is stale and the job runs, then releases.
+	_ = os.WriteFile(filepath.Join(dir, "owner"), []byte("pid=999999\nwho=dead job\n"), 0o644)
+	if why := s.workspaceHold(); why != "" {
+		t.Fatalf("a stale lock must not hold: %q", why)
+	}
+	j := runOne(t, s, req("MyGame", KindCompile, 'a'))
+	if j.State != StateSucceeded {
+		t.Fatalf("state %s %q", j.State, j.Message)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("the job must release the lock when done")
 	}
 }
