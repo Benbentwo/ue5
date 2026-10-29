@@ -19,6 +19,7 @@ type dashboardServer struct {
 	agents     *AgentRegistry
 	manager    *InstanceManager
 	builder    *BuildOrchestrator
+	ci         ciRoutes
 	version    string
 	startedAt  time.Time
 
@@ -27,7 +28,7 @@ type dashboardServer struct {
 }
 
 func newDashboardServer(d *Daemon) *dashboardServer {
-	return &dashboardServer{
+	ds := &dashboardServer{
 		state:      d.state,
 		agents:     d.agents,
 		manager:    d.manager,
@@ -36,6 +37,15 @@ func newDashboardServer(d *Daemon) *dashboardServer {
 		startedAt:  d.startedAt,
 		sseClients: make(map[chan AgentEvent]struct{}),
 	}
+	if d.ci != nil {
+		ds.ci = d.ci
+	}
+	return ds
+}
+
+// ciRoutes is the slice of *ci.Handler the dashboard mounts.
+type ciRoutes interface {
+	Register(mux *http.ServeMux, wrap func(http.HandlerFunc) http.HandlerFunc)
 }
 
 func (ds *dashboardServer) Start(addr string) error {
@@ -73,7 +83,7 @@ func (ds *dashboardServer) routes() *http.ServeMux {
 		return func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
 				return
@@ -95,6 +105,9 @@ func (ds *dashboardServer) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/editor/stop", cors(ds.handleEditorStop))
 	mux.HandleFunc("GET /api/events", cors(ds.handleSSE))
 	mux.HandleFunc("GET /api/build/logs/stream", cors(ds.handleBuildLogStream))
+	if ds.ci != nil {
+		ds.ci.Register(mux, cors)
+	}
 
 	// Serve embedded static files (production) or nothing (dev — use Vite)
 	if hasDashboardStatic() {

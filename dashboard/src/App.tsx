@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import type {
   DaemonStatus,
   BuildInfo,
@@ -11,8 +11,21 @@ import Header from './components/Header'
 import BuildPanel from './components/BuildPanel'
 import InstancePanel from './components/InstancePanel'
 import AgentPanel from './components/AgentPanel'
+import Builds from './components/Builds'
+
+function useHash(): string {
+  const [hash, setHash] = useState(window.location.hash)
+  useEffect(() => {
+    const on = () => setHash(window.location.hash)
+    window.addEventListener('hashchange', on)
+    return () => window.removeEventListener('hashchange', on)
+  }, [])
+  return hash
+}
 
 function App() {
+  const hash = useHash()
+  const ciMatch = hash.match(/^#\/ci(?:\/([^/]+))?/)
   const {
     data: status,
     refetch: refetchStatus,
@@ -113,6 +126,15 @@ function App() {
         selectedProject={selectedProject}
         onSelectProject={setSelectedProject}
       />
+      <nav className="flex gap-1 border-b border-gray-800 bg-gray-900 px-6 text-sm">
+        <a href="#/" className={`border-b-2 px-3 py-2 ${!ciMatch ? 'border-blue-500 text-gray-100' : 'border-transparent text-gray-400 hover:text-gray-200'}`}>Editor</a>
+        <a href="#/ci" className={`border-b-2 px-3 py-2 ${ciMatch ? 'border-blue-500 text-gray-100' : 'border-transparent text-gray-400 hover:text-gray-200'}`}>Builds</a>
+      </nav>
+      {ciMatch ? (
+        <main className="flex-1 p-6">
+          <Builds jobId={ciMatch[1]} />
+        </main>
+      ) : (
       <main className="flex-1 grid grid-cols-1 gap-6 p-6 md:grid-cols-3">
         <BuildPanel
           buildInfo={buildInfo}
@@ -127,6 +149,7 @@ function App() {
         />
         <AgentPanel agents={agents ?? []} />
       </main>
+      )}
     </div>
   )
 }

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Benbentwo/ue5/pkg/ci"
 	"github.com/charmbracelet/log"
 )
 
@@ -26,6 +27,7 @@ type Daemon struct {
 	builder    *BuildOrchestrator
 	mcpServer  *mcpServerWrapper
 	dashboard  *dashboardServer
+	ci         *ci.Handler // build service; nil if it failed to load
 	version    string
 	startedAt  time.Time
 	ctx        context.Context
@@ -119,6 +121,10 @@ func (d *Daemon) Run() error {
 			log.Error("MCP server failed", "error", err)
 		}
 	}()
+
+	// Build service (pkg/ci). Its API is always mounted so the dashboard can
+	// say "off" on a laptop; the runner only starts where config enables it.
+	d.startCI()
 
 	// Start dashboard web server alongside MCP
 	d.dashboard = newDashboardServer(d)
@@ -531,4 +537,33 @@ func (d *Daemon) cleanupSocket() error {
 		return os.Remove(d.socketPath)
 	}
 	return nil
+}
+
+// startCI loads ~/.ue5/ci and, when enabled, starts the build lane.
+func (d *Daemon) startCI() {
+	cfg, err := ci.LoadConfig(HomeDir())
+	if err != nil {
+		log.Error("CI config unreadable; build service off", "error", err)
+		return
+	}
+	svc, err := ci.NewService(HomeDir(), cfg)
+	if err != nil {
+		log.Error("CI queue unreadable; build service off", "error", err)
+		return
+	}
+	svc.Logf = func(format string, args ...any) { log.Info(fmt.Sprintf(format, args...)) }
+	token, err := ci.DispatchToken(HomeDir())
+	if err != nil {
+		log.Error("CI dispatch token unavailable; dispatch disabled", "error", err)
+	}
+	d.ci = &ci.Handler{Service: svc, Token: token}
+	if !cfg.Enabled {
+		return
+	}
+	log.Info("CI build service enabled", "box", cfg.Box, "work_root", cfg.WorkRoot, "reporting", svc.Reporter.PAT != "")
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		svc.Run(d.ctx)
+	}()
 }

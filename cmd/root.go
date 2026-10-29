@@ -53,7 +53,8 @@ func PreRun(cmd *cobra.Command, args []string) {
 		return
 	}
 	// Skip PreRun for server subcommands — they handle project resolution independently
-	if cmd.Name() == "server" || (cmd.Parent() != nil && cmd.Parent().Name() == "server") {
+	if cmd.Name() == "server" || (cmd.Parent() != nil && cmd.Parent().Name() == "server") ||
+		cmd.Name() == "ci" || (cmd.Parent() != nil && cmd.Parent().Name() == "ci") {
 		return
 	}
 	if Debug {
