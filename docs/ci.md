@@ -88,6 +88,32 @@ runs as the same user as the daemon, so it can read the token and another device
 on the network cannot. The dashboard asks for it once (paste it) before Cancel /
 Retry.
 
+## Windows build boxes
+
+- **Secrets:** store the PAT as a generic credential for the user the daemon runs as:
+  `cmdkey /generic:ue5-ci:azure-pat /user:ue5-ci /pass:<PAT>`. The `secrets/` file
+  and the `UE5_CI_AZURE_PAT` variable also work.
+- **Dispatch token across accounts:** a CI agent service usually runs as
+  `NetworkService`, not as the user whose daemon builds. Put the token where both can
+  read it: `"token_file": "C:\\ProgramData\\ue5-ci\\token"` in the daemon's config,
+  give the agent's account read access (`icacls C:\ProgramData\ue5-ci\token /grant
+  "NETWORK SERVICE:R"`), and pass the same path to `ue5 ci dispatch --token-file`
+  (or `UE5_CI_TOKEN_FILE`).
+- **Start at logon:** `ue5 server autostart install` registers a Scheduled Task that
+  runs the daemon in your session, so builds get a desktop session rather than a
+  service's Session 0 (where some editor tooling cannot open windows).
+- **LFS files:** filled with `CopyFileW`. On a ReFS volume, such as a Windows 11 Dev
+  Drive, Windows 11 24H2 and later turn that copy into a block clone at no extra disk
+  cost; on NTFS it is a full copy, so leave room for the LFS tree twice.
+- **Long paths:** git runs with `core.longpaths=true`. Enable Win32 long paths
+  (`LongPathsEnabled`) for the build tools as well.
+- **Dashboard from the LAN:** allow the port through the firewall, e.g.
+  `New-NetFirewallRule -DisplayName "ue5 dashboard" -Direction Inbound -Protocol TCP
+  -LocalPort 9516 -Action Allow -Profile Private`.
+
+On macOS, `ue5 server autostart install` registers a LaunchAgent instead (restarted
+if it crashes).
+
 ## Queue rules
 
 - **One heavy build per box.** One UE compile or cook uses every core, and every

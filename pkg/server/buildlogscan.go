@@ -11,7 +11,7 @@ import (
 // fatalBuildMarkers are log substrings that mean the build did NOT produce
 // binaries, even when the build script exited zero.
 //
-// WHY THIS EXISTS AT ALL
+// # WHY THIS EXISTS AT ALL
 //
 // `cmd.Wait()` reports the exit status of Epic's Build.sh, not of
 // UnrealBuildTool. On 2026-09-01 UBT died with a segmentation fault inside
@@ -25,7 +25,7 @@ import (
 // The transient segfault itself is the documented flaky-toolchain class and is
 // cured by a retry. The bug is that the daemon called it a success.
 //
-// WHY SUBSTRINGS AND NOT AN EXIT CODE
+// # WHY SUBSTRINGS AND NOT AN EXIT CODE
 //
 // The exit code is the thing that lied. A log scan is the only evidence
 // available once the process that lied has gone. These markers are chosen to be

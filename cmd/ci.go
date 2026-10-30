@@ -17,6 +17,7 @@ import (
 )
 
 var (
+	ciTokenFile string
 	ciURL       string
 	ciReq       ci.Request
 	ciPlugins   []string
@@ -126,7 +127,7 @@ func ciAction(id, action string) error {
 }
 
 func ciPost(path string, body []byte, out any) error {
-	tok, err := ci.DispatchToken(server.HomeDir())
+	tok, err := ci.DispatchTokenAt(ci.TokenPath(server.HomeDir(), ciTokenFile))
 	if err != nil {
 		return fmt.Errorf("read the dispatch token: %w", err)
 	}
@@ -168,6 +169,7 @@ func truncate(s string, n int) string {
 func init() {
 	rootCmd.AddCommand(ciCmd)
 	ciCmd.PersistentFlags().StringVar(&ciURL, "url", "http://localhost:9516", "build service to talk to")
+	ciCmd.PersistentFlags().StringVar(&ciTokenFile, "token-file", "", "dispatch token file (default $UE5_CI_TOKEN_FILE, else ~/.ue5/ci/token)")
 	f := ciDispatchCmd.Flags()
 	f.StringVar(&ciReq.Game, "game", "", "game name; also its checkout folder and .uproject name")
 	f.StringVar((*string)(&ciReq.Kind), "kind", "compile", "compile, package or steam")

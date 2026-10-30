@@ -575,7 +575,7 @@ func (d *Daemon) startCI() {
 		return
 	}
 	svc.Logf = func(format string, args ...any) { log.Info(fmt.Sprintf(format, args...)) }
-	token, err := ci.DispatchToken(HomeDir())
+	token, err := ci.DispatchTokenAt(ci.TokenPath(HomeDir(), cfg.TokenFile))
 	if err != nil {
 		log.Error("CI dispatch token unavailable; dispatch disabled", "error", err)
 	}
