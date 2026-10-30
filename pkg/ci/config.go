@@ -39,6 +39,8 @@ type Config struct {
 	// PublicURL is how other machines reach this dashboard; it goes into the
 	// commit status link. Default http://<hostname>.local:9516.
 	PublicURL string `json:"public_url"`
+	// TokenFile overrides where the dispatch token is kept (see TokenPath).
+	TokenFile string `json:"token_file,omitempty"`
 	// Peers are other build boxes' dashboards, shown on the same page.
 	Peers []string `json:"peers,omitempty"`
 	// TimeoutMinutes caps one job per kind.
@@ -120,11 +122,31 @@ func expandHome(p, home string) string {
 // use. Only the user the daemon runs as can read it, and the Azure agent runs as
 // that same user, so it can dispatch while another device on the LAN cannot.
 func DispatchToken(home string) (string, error) {
-	path := filepath.Join(Dir(home), "token")
+	return DispatchTokenAt(TokenPath(home, ""))
+}
+
+// TokenPath is where the dispatch token lives: an explicit path, else
+// $UE5_CI_TOKEN_FILE, else ~/.ue5/ci/token. A CI agent that runs as a different
+// account from the daemon (a Windows agent service runs as NetworkService) can
+// only dispatch if both sides use a file it may read: set "token_file" in the
+// daemon's config to such a path and give the agent the same path through
+// UE5_CI_TOKEN_FILE or `ue5 ci dispatch --token-file`.
+func TokenPath(home, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := strings.TrimSpace(os.Getenv("UE5_CI_TOKEN_FILE")); env != "" {
+		return env
+	}
+	return filepath.Join(Dir(home), "token")
+}
+
+// DispatchTokenAt reads the token at path, creating it on first use.
+func DispatchTokenAt(path string) (string, error) {
 	if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) > 0 {
 		return strings.TrimSpace(string(b)), nil
 	}
-	if err := os.MkdirAll(Dir(home), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
 	b := make([]byte, 24)
@@ -140,9 +162,9 @@ func DispatchToken(home string) (string, error) {
 
 // Secret looks a named secret up, first in the environment
 // (UE5_CI_<NAME>, e.g. UE5_CI_AZURE_PAT), then in the macOS Keychain
-// (service "ue5-ci", account <name>), then in ~/.ue5/ci/secrets/<name> (a
-// file only its owner can read; the Windows fallback until Credential Manager
-// support lands). Empty means not configured.
+// (service "ue5-ci", account <name>) or the Windows Credential Manager
+// (generic credential "ue5-ci:<name>"), then in ~/.ue5/ci/secrets/<name> (a
+// file only its owner can read). Empty means not configured.
 func Secret(home, name string) string {
 	v, _ := SecretWithSource(home, name)
 	return v
@@ -163,6 +185,9 @@ func SecretWithSource(home, name string) (string, string) {
 				return v, "macOS Keychain (service ue5-ci, account " + name + ")"
 			}
 		}
+	}
+	if v, src := credManagerSecret(name); v != "" {
+		return v, src
 	}
 	path := filepath.Join(Dir(home), "secrets", name)
 	if b, err := os.ReadFile(path); err == nil {

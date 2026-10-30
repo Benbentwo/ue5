@@ -22,9 +22,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "ue5",
-	Short: "UE5 CLI to help build and package Unreal Engine 5 projects",
-	Long:  `UE5 CLI is a command line tool to help build and package Unreal Engine 5 projects.`,
+	Use:     "ue5",
+	Short:   "UE5 CLI to help build and package Unreal Engine 5 projects",
+	Long:    `UE5 CLI is a command line tool to help build and package Unreal Engine 5 projects.`,
 	Version: "",
 	Run: func(cmd *cobra.Command, args []string) {
 		err := cmd.Help()

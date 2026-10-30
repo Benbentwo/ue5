@@ -81,9 +81,9 @@ func TestRebuildFailsWritesFailedStatusAndError(t *testing.T) {
 		ProjectPath: filepath.Join(dir, "MyGame.uproject"),
 		// FULL, because that is the path the buildRunner hook covers and the path
 		// `ue5 server rebuild --mode full` takes -- the mode the incident happened on.
-		Mode:        BuildModeFull,
-		Label:       "segfault repro",
-		AgentID:     "test",
+		Mode:    BuildModeFull,
+		Label:   "segfault repro",
+		AgentID: "test",
 	}})
 
 	b.executeBuild(context.Background(), record)

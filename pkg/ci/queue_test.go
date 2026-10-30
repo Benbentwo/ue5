@@ -155,3 +155,27 @@ func TestValidateRejectsBadRequests(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenPathPrecedenceAndSharing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UE5_CI_TOKEN_FILE", "")
+	if got := TokenPath(home, ""); got != filepath.Join(home, "ci", "token") {
+		t.Fatalf("default %s", got)
+	}
+	shared := filepath.Join(t.TempDir(), "shared", "token")
+	t.Setenv("UE5_CI_TOKEN_FILE", shared)
+	if got := TokenPath(home, ""); got != shared {
+		t.Fatalf("env %s", got)
+	}
+	if got := TokenPath(home, "/explicit"); got != "/explicit" {
+		t.Fatalf("explicit %s", got)
+	}
+	// The daemon creates the shared token; another account reading the same file gets the same value.
+	a, err := DispatchTokenAt(shared)
+	if err != nil || len(a) < 32 {
+		t.Fatalf("create %q %v", a, err)
+	}
+	if b, _ := DispatchTokenAt(shared); b != a {
+		t.Fatal("a second reader must get the same token")
+	}
+}

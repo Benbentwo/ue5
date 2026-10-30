@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -157,6 +158,10 @@ func (w Workspace) output(ctx context.Context, dir string, args ...string) (stri
 // -c settings through GIT_CONFIG_PARAMETERS.
 func (w Workspace) prefix(args []string) []string {
 	out := []string{"-c", "safe.directory=*"}
+	if runtime.GOOS == "windows" {
+		// Deep Unreal content paths pass 260 characters under a long work root.
+		out = append(out, "-c", "core.longpaths=true")
+	}
 	if w.PAT != "" {
 		// The header is the only credential: no helper may answer (or prompt) instead.
 		out = append(out, "-c", "credential.helper=")
@@ -233,7 +238,7 @@ func (w Workspace) linkLFS(ctx context.Context, dir string, log io.Writer) (int,
 		}
 		fallback = append(fallback, path)
 	}
-	_, _ = fmt.Fprintf(log, "  lfs: %d file(s) cloned from the object store, %d already present, %d via git lfs checkout\n",
+	_, _ = fmt.Fprintf(log, "  lfs: %d file(s) filled from the object store (cloned where the volume supports it), %d already present, %d via git lfs checkout\n",
 		cloned, already, len(fallback))
 	copied := len(fallback)
 	for len(fallback) > 0 {
