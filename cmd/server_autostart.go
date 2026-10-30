@@ -13,7 +13,8 @@ var serverAutostartCmd = &cobra.Command{
 	Use:   "autostart [install|uninstall|status]",
 	Short: "Start the daemon automatically at login",
 	Long: `Registers the daemon to start when you log in: a LaunchAgent on macOS (also
-restarted if it crashes), a Scheduled Task on Windows. Use it on a build box so
+restarted if it crashes), a per-user Run entry on Windows (no administrator
+rights needed). Use it on a build box so
 the build service survives a reboot without anyone starting it by hand.`,
 	Args:      cobra.ExactArgs(1),
 	ValidArgs: []string{"install", "uninstall", "status"},

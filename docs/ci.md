@@ -99,9 +99,16 @@ Retry.
   give the agent's account read access (`icacls C:\ProgramData\ue5-ci\token /grant
   "NETWORK SERVICE:R"`), and pass the same path to `ue5 ci dispatch --token-file`
   (or `UE5_CI_TOKEN_FILE`).
-- **Start at logon:** `ue5 server autostart install` registers a Scheduled Task that
-  runs the daemon in your session, so builds get a desktop session rather than a
-  service's Session 0 (where some editor tooling cannot open windows).
+- **Install where the agent can run it:** a CI agent service running as another
+  account cannot run a binary inside your user profile. Install `ue5.exe` in a
+  shared folder (for example `C:\ProgramData\ue5`) on the system `PATH`; `ue5
+  upgrade` warns when CI is enabled and the binary sits in your profile.
+- **Start at logon:** `ue5 server autostart install` adds a per-user Run entry
+  (`HKCU\...\CurrentVersion\Run`, no administrator rights needed) and starts the
+  daemon now. It runs as you, unelevated, in your desktop session, so builds get a
+  desktop session rather than a service's Session 0 (where some editor tooling
+  cannot open windows). The daemon runs without a window and outlives the
+  terminal that started it.
 - **LFS files:** filled with `CopyFileW`. On a ReFS volume, such as a Windows 11 Dev
   Drive, Windows 11 24H2 and later turn that copy into a block clone at no extra disk
   cost; on NTFS it is a full copy, so leave room for the LFS tree twice.
