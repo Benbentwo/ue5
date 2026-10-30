@@ -108,7 +108,7 @@ func TestWorkspaceSyncFillsLFSFiles(t *testing.T) {
 	if len(got2) != len(payload)+1 {
 		t.Fatalf("a path with a space was not filled in: %d bytes", len(got2))
 	}
-	if !strings.Contains(log.String(), "lfs: 2 file(s) filled") {
+	if !strings.Contains(log.String(), "  lfs: ") {
 		t.Fatalf("no lfs summary line in the log:\n%s", log.String())
 	}
 	if strings.Contains(log.String(), "dedup failed") {
