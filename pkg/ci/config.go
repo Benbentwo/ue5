@@ -1,9 +1,11 @@
 package ci
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -170,6 +172,13 @@ func Secret(home, name string) string {
 	return v
 }
 
+// keychainTimeout bounds one Keychain lookup; a variable so tests can shorten it.
+var keychainTimeout = 15 * time.Second
+
+// keychainWarn reports a Keychain lookup that timed out (stderr reaches the
+// daemon's log).
+var keychainWarn = func(msg string) { fmt.Fprintln(os.Stderr, "ue5 ci: "+msg) }
+
 // SecretWithSource is Secret plus where the value came from ("env
 // UE5_CI_AZURE_PAT", "macOS Keychain", a file path, or "" when not found), so
 // `ue5 ci doctor` can say which copy is in use without ever printing it.
@@ -179,11 +188,22 @@ func SecretWithSource(home, name string) (string, string) {
 		return v, "env " + env
 	}
 	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("security", "find-generic-password", "-s", "ue5-ci", "-a", name, "-w").Output()
+		// A locked keychain, or one whose item does not yet trust this binary, answers
+		// with a dialog. Under a LaunchAgent nobody may be there to click it, and an
+		// unbounded wait here held up the daemon's whole startup (the dashboard port
+		// never opened). Give up after a while and say why.
+		ctx, cancel := context.WithTimeout(context.Background(), keychainTimeout)
+		out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", "ue5-ci", "-a", name, "-w").Output()
+		timedOut := ctx.Err() != nil
+		cancel()
 		if err == nil {
 			if v := strings.TrimSpace(string(out)); v != "" {
 				return v, "macOS Keychain (service ue5-ci, account " + name + ")"
 			}
+		}
+		if timedOut {
+			keychainWarn("the macOS Keychain did not answer within " + keychainTimeout.String() + " for ue5-ci/" + name +
+				" (a dialog may be waiting on the Mac's screen: click Always Allow, or unlock the login keychain); trying the next source")
 		}
 	}
 	if v, src := credManagerSecret(name); v != "" {
@@ -203,7 +223,9 @@ func SecretWithSource(home, name string) (string, string) {
 // differ from os.Hostname (e.g. "Mac.localdomain" from DHCP).
 func localHostName() string {
 	if runtime.GOOS == "darwin" {
-		if out, err := exec.Command("scutil", "--get", "LocalHostName").Output(); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, "scutil", "--get", "LocalHostName").Output(); err == nil {
 			if h := strings.TrimSpace(string(out)); h != "" {
 				return h
 			}
