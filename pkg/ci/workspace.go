@@ -200,11 +200,10 @@ func (w Workspace) LsRemote(ctx context.Context, repo string) (string, error) {
 
 // linkLFS fills in every LFS file the checkout left as a pointer. Where it can
 // (macOS/APFS) it makes the file a clone of the object in .git/lfs/objects, so
-// filling in a 170 GB tree costs no extra disk. `git lfs checkout` writes a full
-// copy of every file and needs the tree's whole size free until a later
-// `git lfs dedup` clones them back; a sync of IslandSurvival (172 GB of LFS)
-// with 113 GB free ran the disk out that way. Files it cannot clone go to
-// `git lfs checkout` as before.
+// filling in even a very large tree costs no extra disk. `git lfs checkout`
+// writes a full copy of every file and needs the tree's whole LFS size free
+// until a later `git lfs dedup` clones them back, so a large tree can run a
+// disk out mid-sync. Files it cannot clone go to `git lfs checkout` as before.
 // It returns how many files went through `git lfs checkout` (full copies).
 func (w Workspace) linkLFS(ctx context.Context, dir string, log io.Writer) (int, error) {
 	out, err := w.output(ctx, dir, "lfs", "ls-files", "--long")
