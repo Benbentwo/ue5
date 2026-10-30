@@ -206,3 +206,20 @@ ue5 ci retry <job-id>
 | POST | `/api/ci/jobs` | token |
 | POST | `/api/ci/jobs/{id}/cancel` | token |
 | POST | `/api/ci/jobs/{id}/retry` | token |
+| GET | `/api/ci/jobs/{id}/artifacts` | token (lists the job's artifact files) |
+| GET | `/api/ci/jobs/{id}/artifacts.tar` | token (streams the artifact directory as a tar) |
+
+### Using another box's artifacts
+
+Packages are not public, so artifact downloads need the serving box's dispatch
+token. A recipe on one box can pull what another box built for the same commit,
+for example a store upload that ships a package built on a different OS:
+
+```
+ue5 ci fetch --from http://otherbox.local:9516 --from-token-file other-box.token \
+  --game MyGame --sha <commit> --kind package --platform Mac --dest <dir>
+```
+
+It picks the newest succeeded job that matches and extracts its artifacts into
+`--dest`. Symlinks (a Mac app bundle has them) arrive as the files they point at,
+so a box that cannot create symlinks can still receive the package.
