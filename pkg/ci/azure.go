@@ -88,6 +88,25 @@ func (r *Reporter) LastError() string {
 	return r.lastErr
 }
 
+// SetPAT swaps the token, e.g. after it was replaced in the secret store.
+func (r *Reporter) SetPAT(pat string) {
+	r.mu.Lock()
+	r.PAT = pat
+	r.mu.Unlock()
+}
+
+// HasPAT reports whether a token is configured.
+func (r *Reporter) HasPAT() bool { return r != nil && r.token() != "" }
+
+func (r *Reporter) token() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.PAT
+}
+
 func (r *Reporter) setErr(msg string) {
 	r.mu.Lock()
 	r.lastErr, r.lastAt = msg, time.Now()
@@ -113,7 +132,11 @@ func StatusName(j *Job) string { return string(j.Kind) + "-" + j.Platform }
 // Report posts one status for j. A repo that is not on Azure, or no PAT, is a
 // silent no-op.
 func (r *Reporter) Report(ctx context.Context, j *Job) {
-	if r == nil || r.PAT == "" {
+	if r == nil {
+		return
+	}
+	pat := r.token()
+	if pat == "" {
 		return
 	}
 	repo, ok := ParseAzureRepo(j.Repo)
@@ -136,7 +159,7 @@ func (r *Reporter) Report(ctx context.Context, j *Job) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(":"+r.PAT)))
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(":"+pat)))
 	client := r.Client
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}

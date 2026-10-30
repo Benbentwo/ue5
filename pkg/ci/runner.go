@@ -71,8 +71,26 @@ func (s *Service) Running() *Job {
 	return j
 }
 
+// refreshPAT re-reads the azure-pat secret, so a token replaced in the
+// Keychain (or env/file) takes effect on the next build without a daemon
+// restart. Only the runner goroutine writes s.Workspace.
+func (s *Service) refreshPAT(updateWorkspace bool) {
+	if s.Home == "" {
+		return
+	}
+	pat := Secret(s.Home, "azure-pat")
+	if updateWorkspace {
+		s.Workspace.PAT = pat
+	}
+	if s.Reporter != nil && s.Reporter.token() != pat {
+		s.Reporter.SetPAT(pat)
+		s.Logf("ci: azure-pat changed in the secret store; using the new one")
+	}
+}
+
 // Dispatch queues a request and reports it (and anything it superseded).
 func (s *Service) Dispatch(ctx context.Context, r Request) (*Job, error) {
+	s.refreshPAT(false)
 	j, superseded, err := s.Queue.Enqueue(r)
 	if err != nil {
 		return nil, err
@@ -186,6 +204,7 @@ func (s *Service) run(parent context.Context, j *Job) {
 		s.mu.Unlock()
 	}()
 
+	s.refreshPAT(true)
 	release, err := AcquireLock(s.Config.WorkRoot, "ue5 ci job "+j.ID+" ("+j.Game+" "+string(j.Kind)+")")
 	if err != nil {
 		// Someone took the workspace between the hold check and now: wait again.
