@@ -94,7 +94,8 @@ func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, su
 	if err := git("lfs", "fetch", "origin", sha); err != nil {
 		return err
 	}
-	if err := git("lfs", "checkout"); err != nil {
+	copied, err := w.linkLFS(ctx, dir, log)
+	if err != nil {
 		return err
 	}
 	if submodules {
@@ -112,8 +113,10 @@ func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, su
 	if head != sha {
 		return fmt.Errorf("%s is at %s after the sync, not %s", dir, head, sha)
 	}
-	// Copy-on-write clones of the LFS objects; space only, so never fatal.
-	if w.git(ctx, dir, io.Discard, "lfs", "dedup", "--test") == nil {
+	// Files git lfs checkout wrote as full copies become clones; space only, so
+	// never fatal. Not needed when linkLFS cloned everything itself (and dedup
+	// would refuse anyway: a freshly cloned file differs from the index by stat).
+	if copied > 0 && w.git(ctx, dir, io.Discard, "lfs", "dedup", "--test") == nil {
 		if err := git("lfs", "dedup"); err != nil {
 			_, _ = fmt.Fprintf(log, "  warning: git lfs dedup failed in %s (the checkout is still correct): %v\n", dir, err)
 		}
@@ -193,4 +196,54 @@ func (w Workspace) LsRemote(ctx context.Context, repo string) (string, error) {
 	cmd.Env = append(os.Environ(), noPrompt...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// linkLFS fills in every LFS file the checkout left as a pointer. Where it can
+// (macOS/APFS) it makes the file a clone of the object in .git/lfs/objects, so
+// filling in a 170 GB tree costs no extra disk. `git lfs checkout` writes a full
+// copy of every file and needs the tree's whole size free until a later
+// `git lfs dedup` clones them back; a sync of IslandSurvival (172 GB of LFS)
+// with 113 GB free ran the disk out that way. Files it cannot clone go to
+// `git lfs checkout` as before.
+// It returns how many files went through `git lfs checkout` (full copies).
+func (w Workspace) linkLFS(ctx context.Context, dir string, log io.Writer) (int, error) {
+	out, err := w.output(ctx, dir, "lfs", "ls-files", "--long")
+	if err != nil {
+		return 0, fmt.Errorf("git lfs ls-files: %w", err)
+	}
+	var fallback []string
+	cloned, already := 0, 0
+	for _, line := range strings.Split(out, "\n") {
+		// "<oid> <*|-> <path>": '-' means the working file is still a pointer.
+		parts := strings.SplitN(line, " ", 3)
+		if len(parts) != 3 || len(parts[0]) < 5 {
+			continue
+		}
+		oid, mark, path := parts[0], parts[1], parts[2]
+		if mark != "-" {
+			already++
+			continue
+		}
+		src := filepath.Join(dir, ".git", "lfs", "objects", oid[0:2], oid[2:4], oid)
+		dst := filepath.Join(dir, path)
+		if _, err := os.Stat(src); err == nil {
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err == nil && cloneFile(src, dst) == nil {
+				cloned++
+				continue
+			}
+		}
+		fallback = append(fallback, path)
+	}
+	_, _ = fmt.Fprintf(log, "  lfs: %d file(s) cloned from the object store, %d already present, %d via git lfs checkout\n",
+		cloned, already, len(fallback))
+	copied := len(fallback)
+	for len(fallback) > 0 {
+		n := min(len(fallback), 200)
+		args := append([]string{"lfs", "checkout", "--"}, fallback[:n]...)
+		if err := w.git(ctx, dir, log, args...); err != nil {
+			return copied, err
+		}
+		fallback = fallback[n:]
+	}
+	return copied, nil
 }

@@ -73,3 +73,54 @@ func TestWorkspaceSyncChecksOutPinnedCommits(t *testing.T) {
 		t.Fatal("untracked files must be cleaned")
 	}
 }
+
+func TestWorkspaceSyncFillsLFSFiles(t *testing.T) {
+	if exec.Command("git", "lfs", "version").Run() != nil {
+		t.Skip("git-lfs not installed")
+	}
+	dir := filepath.Join(t.TempDir(), "LfsGame")
+	_ = os.MkdirAll(dir, 0o755)
+	gitT(t, dir, "init", "-q")
+	gitT(t, dir, "lfs", "install", "--local")
+	gitT(t, dir, "lfs", "track", "*.bin")
+	payload := bytes.Repeat([]byte("lfs-payload-"), 4096)
+	_ = os.WriteFile(filepath.Join(dir, "big.bin"), payload, 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "sub dir"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sub dir", "two.bin"), append(payload, 'x'), 0o644)
+	gitT(t, dir, "add", ".")
+	gitT(t, dir, "commit", "-qm", "lfs")
+	sha := gitT(t, dir, "rev-parse", "HEAD")
+
+	w := Workspace{Root: t.TempDir()}
+	j := &Job{Request: Request{Game: "LfsGame", Repo: "file://" + dir, SHA: sha}}
+	var log bytes.Buffer
+	if err := w.Sync(context.Background(), j, &log); err != nil {
+		if strings.Contains(log.String(), "file://") && strings.Contains(strings.ToLower(log.String()), "not supported") {
+			t.Skip("this git-lfs cannot fetch from a file:// remote")
+		}
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	got, _ := os.ReadFile(filepath.Join(w.GameDir("LfsGame"), "big.bin"))
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("big.bin holds %d bytes, want the %d-byte object (a pointer was left?)\n%s", len(got), len(payload), log.String())
+	}
+	got2, _ := os.ReadFile(filepath.Join(w.GameDir("LfsGame"), "sub dir", "two.bin"))
+	if len(got2) != len(payload)+1 {
+		t.Fatalf("a path with a space was not filled in: %d bytes", len(got2))
+	}
+	if !strings.Contains(log.String(), "lfs: ") {
+		t.Fatalf("no lfs summary line in the log:\n%s", log.String())
+	}
+	if strings.Contains(log.String(), "dedup failed") {
+		t.Fatalf("dedup should not run after a clone fill-in:\n%s", log.String())
+	}
+	// A second sync of the same commit keeps the files intact.
+	log.Reset()
+	if err := w.Sync(context.Background(), j, &log); err != nil {
+		t.Fatalf("resync: %v\n%s", err, log.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(w.GameDir("LfsGame"), "big.bin")); !bytes.Equal(got, payload) {
+		t.Fatalf("resync broke big.bin (%d bytes)\n%s", len(got), log.String())
+	}
+	t.Log(strings.TrimSpace(log.String()[strings.Index(log.String(), "lfs: "):]))
+}
