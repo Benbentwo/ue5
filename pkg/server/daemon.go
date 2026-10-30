@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -21,6 +23,7 @@ import (
 type Daemon struct {
 	socketPath string
 	listener   net.Listener
+	socketInfo os.FileInfo // the socket this daemon created; cleanup removes only that
 	manager    *InstanceManager
 	state      *StateStore
 	agents     *AgentRegistry
@@ -93,16 +96,18 @@ func (d *Daemon) Run() error {
 		}
 	})
 
+	// Remove a stale socket file, but never a live daemon's: a second daemon
+	// started while one is busy or restarting used to delete the live one's
+	// socket, leaving it serving HTTP while every CLI call reported it down.
+	if err := d.cleanupSocket(); err != nil {
+		return err
+	}
+
 	// Write PID file
 	if err := d.writePIDFile(); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 	defer d.removePIDFile()
-
-	// Remove stale socket file if it exists
-	if err := d.cleanupSocket(); err != nil {
-		return fmt.Errorf("failed to cleanup socket: %w", err)
-	}
 
 	// Create Unix domain socket listener
 	listener, err := net.Listen("unix", d.socketPath)
@@ -110,6 +115,7 @@ func (d *Daemon) Run() error {
 		return fmt.Errorf("failed to listen on %s: %w", d.socketPath, err)
 	}
 	d.listener = listener
+	d.socketInfo, _ = os.Stat(d.socketPath)
 	defer d.cleanup()
 
 	// Start MCP SSE server alongside Unix socket
@@ -519,8 +525,15 @@ func (d *Daemon) shutdown() {
 	d.wg.Wait()
 }
 
+// cleanup removes the socket only while it is still the one this daemon
+// created: a newer daemon may already own the path.
 func (d *Daemon) cleanup() {
-	_ = os.Remove(d.socketPath)
+	if d.socketInfo == nil {
+		return
+	}
+	if cur, err := os.Stat(d.socketPath); err == nil && os.SameFile(cur, d.socketInfo) {
+		_ = os.Remove(d.socketPath)
+	}
 }
 
 func (d *Daemon) writePIDFile() error {
@@ -528,12 +541,22 @@ func (d *Daemon) writePIDFile() error {
 	return os.WriteFile(DaemonPIDFile(), []byte(fmt.Sprintf("%d", pid)), 0644)
 }
 
+// removePIDFile removes the PID file only while it still names this process.
 func (d *Daemon) removePIDFile() {
-	_ = os.Remove(DaemonPIDFile())
+	if b, err := os.ReadFile(DaemonPIDFile()); err == nil && strings.TrimSpace(string(b)) == fmt.Sprintf("%d", os.Getpid()) {
+		_ = os.Remove(DaemonPIDFile())
+	}
 }
+
+// ErrDaemonRunning means another daemon already answers on the socket.
+var ErrDaemonRunning = errors.New("another ue5 daemon is already running")
 
 func (d *Daemon) cleanupSocket() error {
 	if _, err := os.Stat(d.socketPath); err == nil {
+		if conn, derr := net.DialTimeout("unix", d.socketPath, time.Second); derr == nil {
+			_ = conn.Close()
+			return fmt.Errorf("%w (socket %s accepts connections)", ErrDaemonRunning, d.socketPath)
+		}
 		return os.Remove(d.socketPath)
 	}
 	return nil
