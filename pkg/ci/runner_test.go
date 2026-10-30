@@ -239,3 +239,17 @@ func TestWorkspaceLockHoldsTheQueue(t *testing.T) {
 		t.Fatal("the job must release the lock when done")
 	}
 }
+
+func TestAReplacedPATIsUsedWithoutARestart(t *testing.T) {
+	t.Setenv("UE5_CI_AZURE_PAT", "old-token")
+	s := newTestService(t, "#!/bin/bash\necho built\n")
+	j := runOne(t, s, req("MyGame", KindCompile, 'a'))
+	if j.State != StateSucceeded || s.Workspace.PAT != "old-token" || s.Reporter.token() != "old-token" {
+		t.Fatalf("first build: state %s workspace %q reporter %q", j.State, s.Workspace.PAT, s.Reporter.token())
+	}
+	t.Setenv("UE5_CI_AZURE_PAT", "new-token")
+	runOne(t, s, req("MyGame", KindCompile, 'b'))
+	if s.Workspace.PAT != "new-token" || s.Reporter.token() != "new-token" {
+		t.Fatalf("after the swap: workspace %q reporter %q", s.Workspace.PAT, s.Reporter.token())
+	}
+}

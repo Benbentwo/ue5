@@ -71,7 +71,7 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		Box: s.Config.Box, Enabled: s.Config.Enabled, PublicURL: s.Config.PublicURL,
 		Running: s.Running(), Queued: len(s.Queue.Queued()), FreeGB: free,
 		DiskFloorGB: s.Config.DiskFloorGB, WorkRoot: s.Config.WorkRoot, Peers: peers,
-		Reporting: s.Reporter != nil && s.Reporter.PAT != "", ReportError: s.Reporter.LastError(), Now: time.Now().UTC().Format(time.RFC3339),
+		Reporting: s.Reporter.HasPAT(), ReportError: s.Reporter.LastError(), Now: time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
