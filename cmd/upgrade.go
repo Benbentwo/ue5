@@ -116,6 +116,7 @@ func runUpgrade(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("\nSuccessfully upgraded to version %s!\n", info.LatestVersion)
+	warnInstallLocation(installedPath)
 
 	// The install swaps the binary via rename, so an already-running daemon
 	// keeps executing the old (now-unlinked) version safely — but it never
