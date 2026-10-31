@@ -9,19 +9,19 @@ import (
 
 func TestLocalAddr(t *testing.T) {
 	for addr, want := range map[string]bool{
-		"127.0.0.1:5000":         true,
-		"[::1]:5000":             true,
-		"192.168.1.20:5000":      true,
-		"10.0.0.5:1":             true,
-		"172.16.4.4:1":           true,
-		"[fd00::1]:1":            true,
-		"[fe80::1]:1":            true,
-		"169.254.10.1:1":         true,
-		"[::ffff:192.168.1.2]:1": true,
-		"8.8.8.8:5000":           false,
-		"172.32.0.1:1":           false,
-		"[2001:db8::1]:1":        false,
-		"garbage":                false,
+		"127.0.0.1:5000":          true,
+		"[::1]:5000":              true,
+		"192.168.50.20:5000":      true,
+		"10.0.0.5:1":              true,
+		"172.16.4.4:1":            true,
+		"[fd00::1]:1":             true,
+		"[fe80::1]:1":             true,
+		"169.254.10.1:1":          true,
+		"[::ffff:192.168.50.2]:1": true,
+		"8.8.8.8:5000":            false,
+		"172.32.0.1:1":            false,
+		"[2001:db8::1]:1":         false,
+		"garbage":                 false,
 	} {
 		if got := localAddr(addr); got != want {
 			t.Errorf("localAddr(%q) = %v, want %v", addr, got, want)
@@ -38,14 +38,14 @@ func TestLanCancel(t *testing.T) {
 		token    string
 		wantCode int
 	}{
-		{"off: no token refused", false, "192.168.1.5:1", "", "", http.StatusUnauthorized},
-		{"on: LAN, no origin", true, "192.168.1.5:1", "", "", http.StatusOK},
-		{"on: LAN, LAN origin", true, "192.168.1.5:1", "http://192.168.1.9:9516", "", http.StatusOK},
-		{"on: LAN, .local origin", true, "192.168.1.5:1", "http://buildbox.local:9516", "", http.StatusOK},
-		{"on: LAN, same host origin", true, "192.168.1.5:1", "http://example.lan:9516", "", http.StatusOK},
-		{"on: LAN, internet origin refused", true, "192.168.1.5:1", "https://evil.example.com", "", http.StatusUnauthorized},
+		{"off: no token refused", false, "10.20.0.5:1", "", "", http.StatusUnauthorized},
+		{"on: LAN, no origin", true, "10.20.0.5:1", "", "", http.StatusOK},
+		{"on: LAN, LAN origin", true, "10.20.0.5:1", "http://10.20.0.9:9516", "", http.StatusOK},
+		{"on: LAN, .local origin", true, "10.20.0.5:1", "http://buildbox.local:9516", "", http.StatusOK},
+		{"on: LAN, same host origin", true, "10.20.0.5:1", "http://example.lan:9516", "", http.StatusOK},
+		{"on: LAN, internet origin refused", true, "10.20.0.5:1", "https://evil.example.com", "", http.StatusUnauthorized},
 		{"on: internet address refused", true, "8.8.8.8:1", "", "", http.StatusUnauthorized},
-		{"on: wrong token refused, not waved through", true, "192.168.1.5:1", "", "nope", http.StatusUnauthorized},
+		{"on: wrong token refused, not waved through", true, "10.20.0.5:1", "", "nope", http.StatusUnauthorized},
 		{"off: token from anywhere", false, "8.8.8.8:1", "https://evil.example.com", "tok", http.StatusOK},
 	}
 	for _, c := range cases {
