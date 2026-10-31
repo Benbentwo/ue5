@@ -31,7 +31,7 @@ func (h *Handler) Register(mux *http.ServeMux, wrap func(http.HandlerFunc) http.
 	mux.HandleFunc("GET /api/ci/jobs/{id}/artifacts", wrap(h.auth(h.artifactList)))
 	mux.HandleFunc("GET /api/ci/jobs/{id}/artifacts.tar", wrap(h.auth(h.artifactTar)))
 	mux.HandleFunc("POST /api/ci/jobs", wrap(h.auth(h.dispatch)))
-	mux.HandleFunc("POST /api/ci/jobs/{id}/cancel", wrap(h.auth(h.cancel)))
+	mux.HandleFunc("POST /api/ci/jobs/{id}/cancel", wrap(h.authOrLAN(h.cancel)))
 	mux.HandleFunc("POST /api/ci/jobs/{id}/retry", wrap(h.auth(h.retry)))
 }
 
@@ -58,6 +58,8 @@ type StatusView struct {
 	WorkRoot    string   `json:"work_root"`
 	Peers       []string `json:"peers"`
 	Reporting   bool     `json:"reporting"` // an Azure PAT is configured
+	// LanCancel says a cancel from the local network needs no token here.
+	LanCancel bool `json:"lan_cancel"`
 	// ReportError is the last commit-status failure, e.g. a PAT Azure rejects.
 	ReportError string `json:"report_error,omitempty"`
 	Now         string `json:"now"`
@@ -74,6 +76,7 @@ func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
 		Box: s.Config.Box, Enabled: s.Config.Enabled, PublicURL: s.Config.PublicURL,
 		Running: s.Running(), Queued: len(s.Queue.Queued()), FreeGB: free,
 		DiskFloorGB: s.Config.DiskFloorGB, WorkRoot: s.Config.WorkRoot, Peers: peers,
+		LanCancel: s.Config.LanCancel,
 		Reporting: s.Reporter.HasPAT(), ReportError: s.Reporter.LastError(), Now: time.Now().UTC().Format(time.RFC3339),
 	})
 }

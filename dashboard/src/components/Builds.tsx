@@ -49,6 +49,7 @@ interface CIStatus {
   peers: string[]
   reporting: boolean
   report_error?: string
+  lan_cancel?: boolean
   now: string
 }
 
@@ -187,8 +188,23 @@ function BoxCard({ box }: { box: BoxData }) {
   )
 }
 
-function JobTable({ jobs }: { jobs: CIJob[] }) {
+function JobTable({ jobs, boxes }: { jobs: CIJob[]; boxes: BoxData[] }) {
   const [game, setGame] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const cancel = async (e: React.MouseEvent, j: CIJob) => {
+    e.stopPropagation()
+    if (!confirmCancel(j)) return
+    setError(null)
+    setBusy(j.id)
+    try {
+      await postAction(boxFor(boxes, j.id), j, 'cancel')
+    } catch (err) {
+      setError(`Cancel ${j.game} ${j.kind} · ${j.platform}: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setBusy(null)
+    }
+  }
   const [hideSuperseded, setHideSuperseded] = useState(true)
   const games = useMemo(() => Array.from(new Set(jobs.map((j) => j.game))).sort(), [jobs])
   const shown = jobs.filter(
@@ -212,6 +228,7 @@ function JobTable({ jobs }: { jobs: CIJob[] }) {
           hide superseded
         </label>
       </div>
+      {error && <div className="border-b border-gray-800 px-4 py-2 text-sm text-red-400">{error}</div>}
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="text-xs uppercase text-gray-500">
@@ -224,6 +241,7 @@ function JobTable({ jobs }: { jobs: CIJob[] }) {
               <th className="px-4 py-2">When</th>
               <th className="px-4 py-2">Took</th>
               <th className="px-4 py-2">Note</th>
+              <th className="px-4 py-2"></th>
             </tr>
           </thead>
           <tbody>
@@ -241,11 +259,22 @@ function JobTable({ jobs }: { jobs: CIJob[] }) {
                 <td className="px-4 py-2 text-gray-400">{ago(j.queued_at)}</td>
                 <td className="px-4 py-2 text-gray-400">{dur(j.duration_sec)}</td>
                 <td className="max-w-md truncate px-4 py-2 text-gray-400" title={note(j)}>{note(j)}</td>
+                <td className="px-4 py-2 text-right">
+                  {(j.state === 'queued' || j.state === 'running') && (
+                    <button
+                      onClick={(e) => cancel(e, j)}
+                      disabled={busy === j.id}
+                      className="rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-200 hover:bg-red-900 disabled:opacity-50"
+                    >
+                      {busy === j.id ? 'Canceling…' : 'Cancel'}
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
             {shown.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-6 text-center text-gray-500">No builds yet.</td>
+                <td colSpan={9} className="px-4 py-6 text-center text-gray-500">No builds yet.</td>
               </tr>
             )}
           </tbody>
@@ -255,18 +284,80 @@ function JobTable({ jobs }: { jobs: CIJob[] }) {
   )
 }
 
+// A box's dispatch token, remembered per box in this browser. Boxes keep
+// different tokens, so a cancel sent to a peer uses that peer's.
 const TOKEN_KEY = 'ue5-ci-token'
+const tokenKey = (box: string) => `${TOKEN_KEY}:${box}`
 
-function readToken(): string {
+function readToken(box: string): string {
   try {
-    return localStorage.getItem(TOKEN_KEY) ?? ''
+    return localStorage.getItem(tokenKey(box)) ?? localStorage.getItem(TOKEN_KEY) ?? ''
   } catch {
     return ''
   }
 }
 
+function saveToken(box: string, token: string) {
+  try {
+    localStorage.setItem(tokenKey(box), token)
+  } catch {
+    /* private window: ask again next time */
+  }
+}
+
+function forgetToken(box: string) {
+  try {
+    localStorage.removeItem(tokenKey(box))
+    localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+function hasToken(box: string): boolean {
+  return readToken(box) !== ''
+}
+
+// boxFor finds which box (and so which base URL) owns a job.
+function boxFor(boxes: BoxData[], id: string): BoxData | undefined {
+  return boxes.find((b) => b.jobs.some((j) => j.id === id))
+}
+
+// postAction sends cancel or retry to the box that owns the job. It returns the
+// JSON body on success and throws an Error with a readable message otherwise.
+// A cancel goes without a token when the box allows it from the local network.
+async function postAction(box: BoxData | undefined, job: CIJob, action: 'cancel' | 'retry'): Promise<{ id?: string }> {
+  const base = box?.base ?? ''
+  const name = box?.status?.box ?? job.box
+  const tokenless = action === 'cancel' && box?.status?.lan_cancel === true
+  let token = tokenless ? '' : readToken(name)
+  if (!tokenless && !token) {
+    token = (window.prompt(`Paste the dispatch token of ${name} (its ~/.ue5/ci/token, or the token_file in its config). It is remembered in this browser.`) ?? '').trim()
+    if (!token) throw new Error('canceled: no token given')
+    saveToken(name, token)
+  }
+  const res = await fetch(`${base}/api/ci/jobs/${job.id}/${action}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    if (res.status === 401) {
+      forgetToken(name)
+      throw new Error(`${name} did not accept the token (it has been forgotten; try again to enter it).`)
+    }
+    throw new Error(body.error ?? `${res.status} ${res.statusText}`)
+  }
+  return body
+}
+
+function confirmCancel(job: CIJob): boolean {
+  if (job.state !== 'running') return true
+  return window.confirm(`Stop the running ${job.game} ${job.kind} · ${job.platform} on ${job.box}? The build is lost.`)
+}
+
 function JobDetail({ id, boxes }: { id: string; boxes: BoxData[] }) {
-  const found = boxes.find((b) => b.jobs.some((j) => j.id === id))
+  const found = boxFor(boxes, id)
   const base = found?.base ?? ''
   const [job, setJob] = useState<CIJob | null>(null)
   const [log, setLog] = useState('')
@@ -308,36 +399,17 @@ function JobDetail({ id, boxes }: { id: string; boxes: BoxData[] }) {
 
   const act = useCallback(
     async (action: 'cancel' | 'retry') => {
+      if (!job) return
       setActionError(null)
-      let token = readToken()
-      if (!token) {
-        token = window.prompt(`Paste the dispatch token from ~/.ue5/ci/token on ${job?.box ?? 'the build box'}`) ?? ''
-        if (!token) return
-        try {
-          localStorage.setItem(TOKEN_KEY, token.trim())
-        } catch {
-          /* private window: ask again next time */
-        }
+      if (action === 'cancel' && !confirmCancel(job)) return
+      try {
+        const body = await postAction(found, job, action)
+        if (action === 'retry' && body.id) window.location.hash = `#/ci/${body.id}`
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e))
       }
-      const res = await fetch(`${base}/api/ci/jobs/${id}/${action}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token.trim()}` },
-      })
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        if (res.status === 401) {
-          try {
-            localStorage.removeItem(TOKEN_KEY)
-          } catch {
-            /* ignore */
-          }
-        }
-        setActionError(body.error ?? res.statusText)
-        return
-      }
-      if (action === 'retry' && body.id) window.location.hash = `#/ci/${body.id}`
     },
-    [base, id, job?.box],
+    [found, job],
   )
 
   if (!job) return <div className="text-gray-500">Loading build {id}…</div>
@@ -367,6 +439,17 @@ function JobDetail({ id, boxes }: { id: string; boxes: BoxData[] }) {
           </span>
         </div>
         {actionError && <div className="mt-2 text-sm text-red-400">{actionError}</div>}
+        {hasToken(job.box) && (
+          <button
+            onClick={() => {
+              forgetToken(job.box)
+              setActionError(null)
+            }}
+            className="mt-2 text-xs text-gray-500 hover:text-gray-300 hover:underline"
+          >
+            Forget {job.box}'s token in this browser
+          </button>
+        )}
         <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm md:grid-cols-4">
           <dt className="text-gray-500">Queued</dt><dd className="text-gray-300">{ago(job.queued_at)}</dd>
           <dt className="text-gray-500">Took</dt><dd className="text-gray-300">{dur(job.duration_sec) || '—'}</dd>
@@ -409,7 +492,7 @@ export default function Builds({ jobId }: { jobId?: string }) {
           <BoxCard key={b.base || 'self'} box={b} />
         ))}
       </div>
-      <JobTable jobs={jobs} />
+      <JobTable jobs={jobs} boxes={boxes} />
     </div>
   )
 }
