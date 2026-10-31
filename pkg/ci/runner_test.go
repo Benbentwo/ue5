@@ -328,3 +328,27 @@ func TestReleaseIsAValidKind(t *testing.T) {
 		t.Fatal("negative need_gb must be refused")
 	}
 }
+
+func TestDiskHoldMeasuresTheGamesOwnVolume(t *testing.T) {
+	s := newTestService(t, "#!/bin/bash\n")
+	other := t.TempDir()
+	if err := os.Symlink(other, filepath.Join(s.Config.WorkRoot, "MyGame")); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	var asked string
+	s.freeFn = func(p string) (int, error) { asked = p; return 500, nil }
+	j := &Job{Request: Request{Game: "MyGame", Kind: KindRelease}}
+	if why, _ := s.diskHold(j); why != "" {
+		t.Fatalf("hold %q", why)
+	}
+	want, _ := filepath.EvalSymlinks(other)
+	if asked != want {
+		t.Fatalf("measured %q, want the game's real path %q", asked, want)
+	}
+	// A game with no checkout yet falls back to the work root.
+	j.Game = "NewGame"
+	_, _ = s.diskHold(j)
+	if asked != s.Config.WorkRoot {
+		t.Fatalf("measured %q, want the work root %q", asked, s.Config.WorkRoot)
+	}
+}
