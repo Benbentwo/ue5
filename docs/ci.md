@@ -204,10 +204,31 @@ ue5 ci retry <job-id>
 | GET | `/api/ci/jobs/{id}` | open |
 | GET | `/api/ci/jobs/{id}/log?offset=N` or `?tail=N` | open (`X-Log-Size` header carries the length) |
 | POST | `/api/ci/jobs` | token |
-| POST | `/api/ci/jobs/{id}/cancel` | token |
+| POST | `/api/ci/jobs/{id}/cancel` | token, or none from the local network with `lan_cancel` |
 | POST | `/api/ci/jobs/{id}/retry` | token |
 | GET | `/api/ci/jobs/{id}/artifacts` | token (lists the job's artifact files) |
 | GET | `/api/ci/jobs/{id}/artifacts.tar` | token (streams the artifact directory as a tar) |
+
+### Cancelling from the dashboard
+
+The Builds view has a Cancel button on queued and running jobs, and asks before
+stopping a running one. The first cancel on a box asks for that box's dispatch
+token and remembers it in the browser, per box (the job page has a link to
+forget it). A peer's job is cancelled on the peer, with the peer's token.
+
+To let anyone on the local network cancel without a token, set this in the
+box's `~/.ue5/ci/config.json`:
+
+```json
+"lan_cancel": true
+```
+
+It is off by default. With it on, a cancel from loopback, a private IPv4
+network, an IPv6 ULA or a link-local address needs no token, as long as it
+comes from no web page at all (a script) or from a page on a local address, a
+`.local` name or the box itself, so a page from the internet open in a browser
+on the LAN cannot cancel builds. Dispatch, retry and artifact downloads still
+need the token, and a token still cancels from anywhere.
 
 ### Using another box's artifacts
 

@@ -43,6 +43,10 @@ type Config struct {
 	PublicURL string `json:"public_url"`
 	// TokenFile overrides where the dispatch token is kept (see TokenPath).
 	TokenFile string `json:"token_file,omitempty"`
+	// LanCancel lets a request from this machine or the local network cancel a
+	// job without the dispatch token (see lan.go). Off by default; dispatch,
+	// retry and artifact downloads always need the token.
+	LanCancel bool `json:"lan_cancel,omitempty"`
 	// Peers are other build boxes' dashboards, shown on the same page.
 	Peers []string `json:"peers,omitempty"`
 	// TimeoutMinutes caps one job per kind.
