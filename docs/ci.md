@@ -46,10 +46,11 @@ developer laptop running the daemon for editor management never takes builds.
 | `artifact_root` | `<work_root>/_artifacts` | Each job's package goes to `<artifact_root>/<Game>/<job id>/`. |
 | `keep_artifacts` | `3` | Packaged builds kept per game. |
 | `disk_floor_gb` | `50` | Below this the queue **holds** (it does not fail every job). |
+| `need_gb` | none | Free GB a job needs before it starts, by `"<Game>/<kind>"` or `"<Game>"`, e.g. `{"MyGame/release": 150}`. A dispatch's own `--need-gb` wins; the largest of the floor and these applies. |
 | `reclaim_command` | none | Run once an hour while below the floor, e.g. `["/bin/bash", "/Users/me/reclaim.sh"]`. |
 | `public_url` | `http://<LocalHostName>.local:9516` | Used in commit-status links. Set it (e.g. to the box's IP) if `.local` names do not resolve on your network. |
 | `peers` | none | Other boxes' dashboards, shown together. |
-| `timeout_minutes` | compile 180, package 480, steam 120 | Per kind. |
+| `timeout_minutes` | compile 180, package 480, steam 120, release 720 | Per kind. |
 
 Restart the daemon after editing (`ue5 server stop`; it auto-starts on the next
 `ue5` command, or at login via autostart).
@@ -158,6 +159,21 @@ The service knows nothing game-specific. It runs `ci/<kind>.sh` (macOS/Linux,
 under bash) or `ci/<kind>.ps1` (Windows) from the game checkout at the job's
 commit, so build steps change in the same commit as the game and an old commit
 rebuilds with its own steps. A missing recipe fails the job by name.
+
+Kinds are `compile`, `package`, `steam` and `release`. A `release` job is a whole
+delivery in one recipe (`ci/release.sh` or `.ps1`): compile, cook, package,
+upload and clean up while the service holds the workspace lock, so no other job
+lands on the disk between the cook and the cleanup. It queues with `package`.
+
+### Disk
+
+Before a job starts, the service compares free space on `work_root` with what
+the job needs: the largest of `disk_floor_gb`, the dispatch's `--need-gb` and a
+configured `need_gb`. Short of that, the job **waits** (running `reclaim_command`
+at most once an hour) and the dashboard says how much it has and needs. A job
+that needs more than the whole volume **fails at once** without running, since
+no amount of waiting could fit it. Size `need_gb` as the sync delta plus the
+cook plus the package plus a margin.
 
 Working directory: the game checkout. Exit 0 = succeeded. Environment:
 

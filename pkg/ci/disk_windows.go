@@ -16,3 +16,16 @@ func FreeGB(path string) (int, error) {
 	}
 	return int(avail / (1 << 30)), nil
 }
+
+// TotalGB is the size of the volume holding path.
+func TotalGB(path string) (int, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	var avail, total, free uint64
+	if err := windows.GetDiskFreeSpaceEx(p, &avail, &total, &free); err != nil {
+		return 0, err
+	}
+	return int(total / (1 << 30)), nil
+}
