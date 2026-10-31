@@ -24,6 +24,10 @@ const (
 	KindCompile Kind = "compile"
 	KindPackage Kind = "package"
 	KindSteam   Kind = "steam"
+	// KindRelease is one job for a whole delivery: the game's ci/release recipe
+	// compiles, cooks, packages, uploads and cleans up while the workspace lock is
+	// held, so nothing else lands on the disk between the cook and the cleanup.
+	KindRelease Kind = "release"
 )
 
 // Priority orders the queue: a push compile (~10-15 min) must never sit behind
@@ -32,7 +36,7 @@ func (k Kind) Priority() int {
 	switch k {
 	case KindCompile:
 		return 0
-	case KindPackage:
+	case KindPackage, KindRelease:
 		return 1
 	case KindSteam:
 		return 2
@@ -79,6 +83,11 @@ type Request struct {
 	Source string `json:"source,omitempty"`
 	// SourceURL links back to the dispatching run, when there is one.
 	SourceURL string `json:"source_url,omitempty"`
+	// NeedGB is the free space the whole job needs on the work root: the sync
+	// delta, the cook, the package and a margin. The queue holds the job until
+	// that much is free, and fails it at once when the volume could never hold it.
+	// Zero means only the box's disk floor applies.
+	NeedGB int `json:"need_gb,omitempty"`
 }
 
 // Pinned is one extra repository to sync beside the game.
@@ -96,7 +105,7 @@ func (r Request) Validate() error {
 		return fmt.Errorf("game %q must be letters, digits, '-' or '_'", r.Game)
 	}
 	if !r.Kind.Valid() {
-		return fmt.Errorf("kind %q must be compile, package or steam", r.Kind)
+		return fmt.Errorf("kind %q must be compile, package, steam or release", r.Kind)
 	}
 	if r.Platform == "" {
 		return fmt.Errorf("platform is required")
@@ -106,6 +115,9 @@ func (r Request) Validate() error {
 	}
 	if r.Repo == "" {
 		return fmt.Errorf("repo is required")
+	}
+	if r.NeedGB < 0 {
+		return fmt.Errorf("need_gb must not be negative")
 	}
 	if !isSHA(r.SHA) {
 		return fmt.Errorf("sha %q is not a 40-character commit id", r.SHA)

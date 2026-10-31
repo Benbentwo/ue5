@@ -49,6 +49,9 @@ type Config struct {
 	LanCancel bool `json:"lan_cancel,omitempty"`
 	// Peers are other build boxes' dashboards, shown on the same page.
 	Peers []string `json:"peers,omitempty"`
+	// NeedGB is the free space a job needs, by "<Game>/<kind>" or "<Game>", for
+	// dispatchers that do not send need_gb. A request's own need_gb wins.
+	NeedGB map[string]int `json:"need_gb,omitempty"`
 	// TimeoutMinutes caps one job per kind.
 	TimeoutMinutes map[Kind]int `json:"timeout_minutes,omitempty"`
 }
@@ -102,11 +105,23 @@ func (c *Config) fill() {
 	if c.TimeoutMinutes == nil {
 		c.TimeoutMinutes = map[Kind]int{}
 	}
-	for k, v := range map[Kind]int{KindCompile: 180, KindPackage: 480, KindSteam: 120} {
+	for k, v := range map[Kind]int{KindCompile: 180, KindPackage: 480, KindSteam: 120, KindRelease: 720} {
 		if c.TimeoutMinutes[k] <= 0 {
 			c.TimeoutMinutes[k] = v
 		}
 	}
+}
+
+// Need is the free space job j needs on the work root before it may start: the
+// largest of the box's floor, the request's need_gb and a configured need.
+func (c Config) Need(j *Job) int {
+	n := c.DiskFloorGB
+	for _, v := range []int{j.NeedGB, c.NeedGB[j.Game+"/"+string(j.Kind)], c.NeedGB[j.Game]} {
+		if v > n {
+			n = v
+		}
+	}
+	return n
 }
 
 // Timeout for one job of kind k.

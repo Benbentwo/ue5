@@ -108,13 +108,19 @@ func (q *Queue) enqueueLocked(r Request, retryOf string) (*Job, []*Job) {
 	return j, superseded
 }
 
-// Next claims the highest-priority queued job (compile before package before
-// steam; oldest first within a kind) and marks it running. ok is false when
-// nothing is queued. A non-empty hold (e.g. disk below the floor) vetoes
-// starting; the job stays queued with the reason as its message.
-func (q *Queue) Next(hold string) (*Job, bool) {
+// Peek returns the job Next would claim, without claiming it.
+func (q *Queue) Peek() (*Job, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if best := q.bestLocked(); best != nil {
+		c := *best
+		return &c, true
+	}
+	return nil, false
+}
+
+// bestLocked is the highest-priority queued job, oldest first within a priority.
+func (q *Queue) bestLocked() *Job {
 	var best *Job
 	for _, j := range q.jobs {
 		if j.State != StateQueued {
@@ -125,6 +131,17 @@ func (q *Queue) Next(hold string) (*Job, bool) {
 			best = j
 		}
 	}
+	return best
+}
+
+// Next claims the highest-priority queued job (compile before package before
+// steam; oldest first within a kind) and marks it running. ok is false when
+// nothing is queued. A non-empty hold (e.g. disk below the floor) vetoes
+// starting; the job stays queued with the reason as its message.
+func (q *Queue) Next(hold string) (*Job, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	best := q.bestLocked()
 	if best == nil {
 		return nil, false
 	}

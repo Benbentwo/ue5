@@ -31,6 +31,7 @@ func newTestService(t *testing.T, recipe string) *Service {
 	}
 	s.Reporter = &Reporter{}
 	s.freeFn = func(string) (int, error) { return 500, nil }
+	s.totalFn = func(string) (int, error) { return 1000, nil }
 	s.syncFn = func(ctx context.Context, j *Job, log io.Writer) error {
 		dir := filepath.Join(root, j.Game, "ci")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -139,13 +140,46 @@ func TestCancelStopsARunningRecipe(t *testing.T) {
 
 func TestDiskHold(t *testing.T) {
 	s := newTestService(t, "#!/bin/bash\n")
+	s.totalFn = func(string) (int, error) { return 500, nil }
+	j := &Job{Request: Request{Game: "MyGame", Kind: KindCompile}}
 	s.freeFn = func(string) (int, error) { return 10, nil }
-	if why := s.diskHold(); !strings.Contains(why, "10 GB free") {
-		t.Fatalf("hold %q", why)
+	if why, never := s.diskHold(j); !strings.Contains(why, "10 GB free") || never != "" {
+		t.Fatalf("hold %q never %q", why, never)
 	}
 	s.freeFn = func(string) (int, error) { return 60, nil }
-	if why := s.diskHold(); why != "" {
+	if why, _ := s.diskHold(j); why != "" {
 		t.Fatalf("no hold expected, got %q", why)
+	}
+}
+
+func TestDiskHoldUsesTheJobsNeed(t *testing.T) {
+	s := newTestService(t, "#!/bin/bash\n")
+	s.totalFn = func(string) (int, error) { return 500, nil }
+	s.freeFn = func(string) (int, error) { return 100, nil }
+	j := &Job{Request: Request{Game: "MyGame", Kind: KindRelease, NeedGB: 150}}
+	why, never := s.diskHold(j)
+	if never != "" || !strings.Contains(why, "needs 150 GB") {
+		t.Fatalf("hold %q never %q", why, never)
+	}
+	// A configured need applies when the request sends none, and the larger wins.
+	j.NeedGB = 0
+	s.Config.NeedGB = map[string]int{"MyGame/release": 90}
+	if why, _ := s.diskHold(j); why != "" {
+		t.Fatalf("90 GB need with 100 free should run, got %q", why)
+	}
+	s.Config.NeedGB = map[string]int{"MyGame": 120}
+	if why, _ := s.diskHold(j); !strings.Contains(why, "needs 120 GB") {
+		t.Fatalf("hold %q", why)
+	}
+}
+
+func TestDiskHoldRefusesAJobTheVolumeCannotHold(t *testing.T) {
+	s := newTestService(t, "#!/bin/bash\n")
+	s.totalFn = func(string) (int, error) { return 200, nil }
+	s.freeFn = func(string) (int, error) { return 150, nil }
+	j := &Job{Request: Request{Game: "MyGame", Kind: KindRelease, NeedGB: 250}}
+	if why, never := s.diskHold(j); why != "" || !strings.Contains(never, "only 200 GB") {
+		t.Fatalf("hold %q never %q", why, never)
 	}
 }
 
@@ -251,5 +285,46 @@ func TestAReplacedPATIsUsedWithoutARestart(t *testing.T) {
 	runOne(t, s, req("MyGame", KindCompile, 'b'))
 	if s.Workspace.PAT != "new-token" || s.Reporter.token() != "new-token" {
 		t.Fatalf("after the swap: workspace %q reporter %q", s.Workspace.PAT, s.Reporter.token())
+	}
+}
+
+func TestRunFailsAJobTooBigForTheDiskWithoutRunningIt(t *testing.T) {
+	s := newTestService(t, "#!/bin/bash\necho ran > \"$ARTIFACT_DIR/ran\"\n")
+	s.totalFn = func(string) (int, error) { return 100, nil }
+	r := req("MyGame", KindRelease, 'a')
+	r.NeedGB = 400
+	j, err := s.Dispatch(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.Run(ctx); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	var got *Job
+	for time.Now().Before(deadline) {
+		if got, _ = s.Queue.Get(j.ID); got.State.Terminal() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if got.State != StateFailed || !strings.Contains(got.Message, "only 100 GB") {
+		t.Fatalf("state %s msg %q", got.State, got.Message)
+	}
+	if got.StartedAt != nil || got.LogPath != "" {
+		t.Fatalf("the recipe must not run: started %v log %q", got.StartedAt, got.LogPath)
+	}
+}
+
+func TestReleaseIsAValidKind(t *testing.T) {
+	r := req("MyGame", KindRelease, 'a')
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	r.NeedGB = -1
+	if err := r.Validate(); err == nil {
+		t.Fatal("negative need_gb must be refused")
 	}
 }

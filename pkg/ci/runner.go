@@ -32,6 +32,8 @@ type Service struct {
 	// syncFn and freeFn are seams for tests.
 	syncFn func(ctx context.Context, j *Job, log io.Writer) error
 	freeFn func(path string) (int, error)
+	// totalFn is the volume size, for refusing a job no amount of reclaim could fit.
+	totalFn func(path string) (int, error)
 
 	mu        sync.Mutex
 	running   *Job
@@ -128,10 +130,15 @@ func (s *Service) Run(ctx context.Context) {
 	for {
 		for {
 			hold := ""
-			if len(s.Queue.Queued()) > 0 {
+			if next, ok := s.Queue.Peek(); ok {
 				hold = s.workspaceHold()
 				if hold == "" {
-					hold = s.diskHold()
+					var never string
+					hold, never = s.diskHold(next)
+					if never != "" {
+						s.finish(ctx, next, StateFailed, nil, never, nil)
+						continue
+					}
 				}
 			}
 			j, ok := s.Queue.Next(hold)
@@ -161,29 +168,41 @@ func (s *Service) workspaceHold() string {
 	return ""
 }
 
-// diskHold keeps the queue waiting while the disk is below the floor, running
-// the reclaim command at most once an hour, instead of failing every queued job.
-func (s *Service) diskHold() string {
-	free := s.freeFn
+// diskHold keeps job j queued while free space on the work root is below what
+// it needs (see Config.Need), running the reclaim command at most once an hour,
+// instead of failing every queued job. never is set instead when the volume is
+// smaller than the need, so no amount of waiting or reclaiming could fit the job.
+func (s *Service) diskHold(j *Job) (hold, never string) {
+	free, total := s.freeFn, s.totalFn
 	if free == nil {
 		free = FreeGB
 	}
+	if total == nil {
+		total = TotalGB
+	}
 	root := s.Config.WorkRoot
 	_ = os.MkdirAll(root, 0o755)
+	need := s.Config.Need(j)
+	if size, err := total(root); err == nil && size > 0 && need > size {
+		return "", fmt.Sprintf("needs %d GB free but %s is only %d GB: lower need_gb or move the work root", need, root, size)
+	}
 	gb, err := free(root)
-	if err != nil || gb >= s.Config.DiskFloorGB {
-		return ""
+	if err != nil || gb >= need {
+		return "", ""
 	}
 	if len(s.Config.ReclaimCommand) > 0 && time.Since(s.reclaimed) > time.Hour {
 		s.reclaimed = time.Now()
-		s.Logf("ci: %d GB free on %s, below the %d GB floor; running reclaim", gb, root, s.Config.DiskFloorGB)
+		s.Logf("ci: %d GB free on %s, %s needs %d GB; running reclaim", gb, root, j.ID, need)
 		cmd := exec.Command(s.Config.ReclaimCommand[0], s.Config.ReclaimCommand[1:]...)
 		_ = cmd.Run()
-		if gb2, err := free(root); err == nil && gb2 >= s.Config.DiskFloorGB {
-			return ""
+		if gb2, err := free(root); err == nil && gb2 >= need {
+			return "", ""
 		}
 	}
-	return fmt.Sprintf("waiting for disk: %d GB free on %s, floor is %d GB", gb, root, s.Config.DiskFloorGB)
+	if need > s.Config.DiskFloorGB {
+		return fmt.Sprintf("waiting for disk: %d GB free on %s, this %s %s needs %d GB", gb, root, j.Game, j.Kind, need), ""
+	}
+	return fmt.Sprintf("waiting for disk: %d GB free on %s, floor is %d GB", gb, root, s.Config.DiskFloorGB), ""
 }
 
 func (s *Service) run(parent context.Context, j *Job) {
@@ -331,6 +350,9 @@ func (s *Service) writeBuildJSON(j *Job) {
 	data, err := json.MarshalIndent(j, "", "  ")
 	if err != nil {
 		return
+	}
+	if j.LogPath == "" {
+		return // failed before it ran (e.g. too big for the disk): nothing on disk to describe
 	}
 	_ = os.WriteFile(filepath.Join(filepath.Dir(j.LogPath), "build.json"), data, 0o644)
 	if fi, err := os.Stat(j.ArtifactDir); err == nil && fi.IsDir() {
