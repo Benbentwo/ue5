@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"errors"
+
 	"github.com/Benbentwo/ue5/pkg/server"
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
@@ -16,7 +18,7 @@ var serverStartCmd = &cobra.Command{
 		if serverForeground {
 			// Run daemon in foreground (blocking)
 			d := server.NewDaemon(Version)
-			if err := d.Run(); err != nil {
+			if err := d.Run(); err != nil && !errors.Is(err, server.ErrStoppedBySignal) {
 				log.Fatal("Daemon failed", "error", err)
 			}
 			return

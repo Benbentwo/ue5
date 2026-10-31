@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -49,13 +50,24 @@ type ciRoutes interface {
 }
 
 func (ds *dashboardServer) Start(addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return ds.Serve(ln)
+}
+
+// Serve runs the dashboard on a listener the caller already bound, so the
+// daemon can fail its startup when the port is taken instead of running with no
+// dashboard and no build API.
+func (ds *dashboardServer) Serve(ln net.Listener) error {
 	mux := ds.routes()
 	ds.httpServer = &http.Server{
-		Addr:    addr,
+		Addr:    ln.Addr().String(),
 		Handler: mux,
 	}
-	log.Info("Starting dashboard server", "addr", addr)
-	return ds.httpServer.ListenAndServe()
+	log.Info("Starting dashboard server", "addr", ln.Addr().String())
+	return ds.httpServer.Serve(ln)
 }
 
 func (ds *dashboardServer) Shutdown(ctx context.Context) error {

@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -21,21 +23,23 @@ import (
 
 // Daemon is the long-running server process that manages editor instances.
 type Daemon struct {
-	socketPath string
-	listener   net.Listener
-	socketInfo os.FileInfo // the socket this daemon created; cleanup removes only that
-	manager    *InstanceManager
-	state      *StateStore
-	agents     *AgentRegistry
-	builder    *BuildOrchestrator
-	mcpServer  *mcpServerWrapper
-	dashboard  *dashboardServer
-	ci         *ci.Handler // build service; nil if it failed to load
-	version    string
-	startedAt  time.Time
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	// stoppedBySignal is set when SIGTERM/SIGINT, not a shutdown request, ended the daemon.
+	stoppedBySignal atomic.Bool
+	socketPath      string
+	listener        net.Listener
+	socketInfo      os.FileInfo // the socket this daemon created; cleanup removes only that
+	manager         *InstanceManager
+	state           *StateStore
+	agents          *AgentRegistry
+	builder         *BuildOrchestrator
+	mcpServer       *mcpServerWrapper
+	dashboard       *dashboardServer
+	ci              *ci.Handler // build service; nil if it failed to load
+	version         string
+	startedAt       time.Time
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
 }
 
 // NewDaemon creates a new daemon instance.
@@ -132,11 +136,18 @@ func (d *Daemon) Run() error {
 	// say "off" on a laptop; the runner only starts where config enables it.
 	d.startCI()
 
-	// Start dashboard web server alongside MCP
+	// Start dashboard web server alongside MCP. Bind first: the dashboard carries
+	// the build API, so a daemon without it is half up. Failing here exits
+	// non-zero, which a supervisor (a LaunchAgent's KeepAlive) retries, rather
+	// than leaving a daemon that answers on the socket but nowhere else.
 	d.dashboard = newDashboardServer(d)
+	dashAddr := DashboardAddr()
+	dashLn, err := net.Listen("tcp", dashAddr)
+	if err != nil {
+		return fmt.Errorf("dashboard port %s: %w (another ue5 daemon, perhaps one started as another user, may still hold it)", dashAddr, err)
+	}
 	go func() {
-		dashAddr := DashboardAddr()
-		if err := d.dashboard.Start(dashAddr); err != nil && err != http.ErrServerClosed {
+		if err := d.dashboard.Serve(dashLn); err != nil && err != http.ErrServerClosed {
 			log.Error("Dashboard server failed", "error", err)
 		}
 	}()
@@ -161,6 +172,7 @@ func (d *Daemon) Run() error {
 		select {
 		case sig := <-sigCh:
 			log.Info("Received signal, shutting down", "signal", sig)
+			d.stoppedBySignal.Store(true)
 			d.cancel()
 		case <-d.ctx.Done():
 		}
@@ -174,8 +186,17 @@ func (d *Daemon) Run() error {
 
 	log.Info("Shutting down daemon")
 	d.shutdown()
+	if d.stoppedBySignal.Load() {
+		return ErrStoppedBySignal
+	}
 	return nil
 }
+
+// ErrStoppedBySignal means a signal (a kill, not 'ue5 server stop') ended the
+// daemon. It exits non-zero for it, so a supervisor that restarts only after a
+// failure (a LaunchAgent's KeepAlive SuccessfulExit=false) brings it back,
+// while 'ue5 server stop' still stops it for good.
+var ErrStoppedBySignal = errors.New("stopped by a signal")
 
 // acceptLoop accepts incoming connections and handles them in goroutines.
 func (d *Daemon) acceptLoop() {
@@ -537,8 +558,17 @@ func (d *Daemon) cleanup() {
 }
 
 func (d *Daemon) writePIDFile() error {
-	pid := os.Getpid()
-	return os.WriteFile(DaemonPIDFile(), []byte(fmt.Sprintf("%d", pid)), 0644)
+	data := []byte(fmt.Sprintf("%d", os.Getpid()))
+	err := os.WriteFile(DaemonPIDFile(), data, 0644)
+	if err != nil && errors.Is(err, fs.ErrPermission) {
+		// A stale file another user left (a daemon once run with sudo). The socket
+		// check has already shown no daemon is live, and ~/.ue5 is ours, so the
+		// file can be replaced even though it cannot be written in place.
+		if rerr := os.Remove(DaemonPIDFile()); rerr == nil {
+			err = os.WriteFile(DaemonPIDFile(), data, 0644)
+		}
+	}
+	return err
 }
 
 // removePIDFile removes the PID file only while it still names this process.
