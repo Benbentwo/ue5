@@ -127,14 +127,37 @@ func ciAction(id, action string) error {
 }
 
 func ciPost(path string, body []byte, out any) error {
-	tok, err := ci.DispatchTokenAt(ci.TokenPath(server.HomeDir(), ciTokenFile))
+	tok, err := ciClientToken()
 	if err != nil {
-		return fmt.Errorf("read the dispatch token: %w", err)
+		return err
 	}
 	req, _ := http.NewRequest(http.MethodPost, strings.TrimRight(ciURL, "/")+path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok)
 	return ciDo(req, out)
+}
+
+// ciClientToken reads the dispatch token the way the daemon finds it: --token-file,
+// then $UE5_CI_TOKEN_FILE, then token_file in ~/.ue5/ci/config.json, then
+// ~/.ue5/ci/token. A client only reads it; creating one here would make a token
+// the daemon never uses.
+func ciClientToken() (string, error) {
+	explicit := ciTokenFile
+	if explicit == "" && strings.TrimSpace(os.Getenv("UE5_CI_TOKEN_FILE")) == "" {
+		if cfg, err := ci.LoadConfig(server.HomeDir()); err == nil {
+			explicit = cfg.TokenFile
+		}
+	}
+	path := ci.TokenPath(server.HomeDir(), explicit)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read the dispatch token at %s (pass --token-file, or set token_file in the daemon's config): %w", path, err)
+	}
+	tok := strings.TrimSpace(string(b))
+	if tok == "" {
+		return "", fmt.Errorf("the dispatch token file %s is empty", path)
+	}
+	return tok, nil
 }
 
 func ciGet(path string, out any) error {
@@ -169,7 +192,7 @@ func truncate(s string, n int) string {
 func init() {
 	rootCmd.AddCommand(ciCmd)
 	ciCmd.PersistentFlags().StringVar(&ciURL, "url", "http://localhost:9516", "build service to talk to")
-	ciCmd.PersistentFlags().StringVar(&ciTokenFile, "token-file", "", "dispatch token file (default $UE5_CI_TOKEN_FILE, else ~/.ue5/ci/token)")
+	ciCmd.PersistentFlags().StringVar(&ciTokenFile, "token-file", "", "dispatch token file (default $UE5_CI_TOKEN_FILE, else token_file in ~/.ue5/ci/config.json, else ~/.ue5/ci/token)")
 	f := ciDispatchCmd.Flags()
 	f.StringVar(&ciReq.Game, "game", "", "game name; also its checkout folder and .uproject name")
 	f.StringVar((*string)(&ciReq.Kind), "kind", "compile", "compile, package or steam")
