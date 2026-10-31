@@ -15,7 +15,8 @@ import (
 
 // Handler serves the build API under /api/ci/. Reads are open to the LAN (the
 // dashboard is meant to be viewed from any machine in the house); anything
-// that starts, cancels or retries a build needs the box's dispatch token.
+// that starts, cancels or retries a build, or downloads its artifacts, needs
+// the box's dispatch token.
 type Handler struct {
 	Service *Service
 	Token   string
@@ -27,6 +28,8 @@ func (h *Handler) Register(mux *http.ServeMux, wrap func(http.HandlerFunc) http.
 	mux.HandleFunc("GET /api/ci/jobs", wrap(h.list))
 	mux.HandleFunc("GET /api/ci/jobs/{id}", wrap(h.get))
 	mux.HandleFunc("GET /api/ci/jobs/{id}/log", wrap(h.log))
+	mux.HandleFunc("GET /api/ci/jobs/{id}/artifacts", wrap(h.auth(h.artifactList)))
+	mux.HandleFunc("GET /api/ci/jobs/{id}/artifacts.tar", wrap(h.auth(h.artifactTar)))
 	mux.HandleFunc("POST /api/ci/jobs", wrap(h.auth(h.dispatch)))
 	mux.HandleFunc("POST /api/ci/jobs/{id}/cancel", wrap(h.auth(h.cancel)))
 	mux.HandleFunc("POST /api/ci/jobs/{id}/retry", wrap(h.auth(h.retry)))
