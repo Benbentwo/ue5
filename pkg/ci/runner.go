@@ -180,8 +180,7 @@ func (s *Service) diskHold(j *Job) (hold, never string) {
 	if total == nil {
 		total = TotalGB
 	}
-	root := s.Config.WorkRoot
-	_ = os.MkdirAll(root, 0o755)
+	root := s.diskRoot(j)
 	need := s.Config.Need(j)
 	if size, err := total(root); err == nil && size > 0 && need > size {
 		return "", fmt.Sprintf("needs %d GB free but %s is only %d GB: lower need_gb or move the work root", need, root, size)
@@ -203,6 +202,19 @@ func (s *Service) diskHold(j *Job) (hold, never string) {
 		return fmt.Sprintf("waiting for disk: %d GB free on %s, this %s %s needs %d GB", gb, root, j.Game, j.Kind, need), ""
 	}
 	return fmt.Sprintf("waiting for disk: %d GB free on %s, floor is %d GB", gb, root, s.Config.DiskFloorGB), ""
+}
+
+// diskRoot is where job j's checkout lives, resolved through any symlink or
+// junction: a box can put each game on its own drive behind <work_root>/<Game>,
+// and the free space that matters is that drive's, not the work root's.
+func (s *Service) diskRoot(j *Job) string {
+	_ = os.MkdirAll(s.Config.WorkRoot, 0o755)
+	if j != nil && safeName(j.Game) {
+		if real, err := filepath.EvalSymlinks(filepath.Join(s.Config.WorkRoot, j.Game)); err == nil {
+			return real
+		}
+	}
+	return s.Config.WorkRoot
 }
 
 func (s *Service) run(parent context.Context, j *Job) {

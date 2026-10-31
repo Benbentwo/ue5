@@ -175,6 +175,10 @@ that needs more than the whole volume **fails at once** without running, since
 no amount of waiting could fit it. Size `need_gb` as the sync delta plus the
 cook plus the package plus a margin.
 
+Free space is measured on the volume that holds `<work_root>/<Game>`, followed
+through any symlink or junction, so a game can live on another drive behind a
+link in `work_root`. A game with no checkout yet is measured on `work_root`.
+
 Working directory: the game checkout. Exit 0 = succeeded. Environment:
 
 | Variable | Value |
