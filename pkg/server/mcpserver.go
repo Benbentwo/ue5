@@ -401,7 +401,11 @@ func (w *mcpServerWrapper) registerTools() {
 	w.mcp.AddTool(
 		mcp.NewTool("stop_editor",
 			mcp.WithDescription("Stop the running editor for a project. "+
-				"Use force=true to send SIGKILL instead of a graceful shutdown."),
+				"By default the editor is asked to quit by itself over its SadTire MCP bridge "+
+				"(PIE is ended and asset editors are closed first; a booting editor is waited for), "+
+				"falling back to SIGTERM then SIGKILL only if that fails or times out — "+
+				"so this call can take minutes on a booting editor. "+
+				"Use force=true to send SIGKILL immediately."),
 			mcp.WithString("project_path", mcp.Required(),
 				mcp.Description("Path to the .uproject file, or any directory inside the project (resolved by walking up)")),
 			mcp.WithBoolean("force",

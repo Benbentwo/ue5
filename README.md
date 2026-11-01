@@ -120,6 +120,29 @@ ue5 server agents --json                      # List registered AI agents
 
 See `ue5 server --help` for all available subcommands.
 
+### Stopping an editor
+
+`ue5 server kill`, a `full` rebuild, and daemon shutdown do not open with a
+signal. On macOS a SIGTERM drops the engine straight into teardown, and an
+editor with Play-In-Editor running, an asset editor open, or still booting
+crashes there and pops the crash reporter. The daemon instead asks the editor
+to quit by itself over the SadTire MCP bridge it launched it with
+(`-SadTireMCPPort`):
+
+1. wait for the bridge to answer `ping` (up to 3 min for a young editor, 15 s
+   for one older than 10 min) - a booting editor is never signalled mid-boot;
+2. if PIE is running, `stop_pie` and poll until it has ended (20 s);
+3. run the editor's own File > Quit (`CLOSE_SLATE_MAINFRAME`), which closes all
+   asset editors - or a plain `QUIT_EDITOR` when packages are dirty, because
+   File > Quit would open a save prompt nothing can answer;
+4. wait for the process to exit (20 s, then a plain `QUIT_EDITOR` and 45 s more).
+
+Any failure or timeout falls through to SIGTERM, then SIGKILL after 10 s.
+`--force` skips all of it. Unsaved changes are dropped, as with SIGTERM.
+
+`ue5 server quit-editor --pid <pid>` runs the same sequence for one process
+without the daemon and never signals; exit 0 means the process has exited.
+
 ### Log Locations
 
 All server state lives under `~/.ue5/`. Logs are stored per-project using a hash of the `.uproject` path:

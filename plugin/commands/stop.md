@@ -21,9 +21,13 @@ Stop a managed Unreal Editor instance gracefully via the ue5 server daemon.
    ```bash
    ue5 server kill
    ```
-   - Sends SIGTERM for graceful shutdown
-   - Waits up to 10 seconds for clean exit
-   - Falls back to SIGKILL if needed
+   - Asks the editor to quit by itself over its SadTire MCP bridge: waits for a
+     booting editor to become ready, ends Play-In-Editor, then runs the editor's
+     own File > Quit (closing asset editors) - or a plain `QUIT_EDITOR` when
+     packages are dirty, so no save prompt can block it
+   - Falls back to SIGTERM, then SIGKILL after 10 seconds, only if that fails or
+     times out
+   - Unsaved changes are dropped either way, as before
 
 3. **If graceful stop fails, force kill**
    ```bash

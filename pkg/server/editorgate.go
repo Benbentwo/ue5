@@ -95,14 +95,33 @@ func parseEditorProcesses(psOutput, editorBinary, projectPath string) (project [
 }
 
 // ensureNoEditorProcesses blocks until no process running editorBinary has
-// projectPath open. Own-project editors are terminated: SIGTERM first
-// (graceful editor shutdown, no restore prompt on relaunch), SIGKILL after
-// editorExitGrace. Editors from the same engine with a DIFFERENT project
+// projectPath open. Own-project editors are terminated: a bridge-driven
+// self-quit first where the editor carries a SadTire MCP port, then SIGTERM,
+// then SIGKILL after editorExitGrace. Editors from the same engine with a DIFFERENT project
 // open are tolerated with a warning: builder.go always passes
 // -NoHotReloadFromIDE to UBT on full builds, which forces a base-binary
 // link regardless of UBT's engine-wide EditorRuns scan, so their presence
 // can no longer flip the build into emitting hot-reload patch binaries.
 func ensureNoEditorProcesses(editorBinary, projectPath string) error {
+	// Before any signal: an own-project editor the daemon does not track (an
+	// orphan from a previous daemon) but which was launched with a SadTire
+	// MCP port is asked to quit by itself first — see gracefulquit.go. The
+	// tracked instance has already been through this in StopEditor, so in the
+	// normal case there is nothing here. An editor with no port on its
+	// command line is never guessed at; it goes straight to the signals
+	// below. The signal deadlines start AFTER this pass.
+	if project, _, err := scanEditorProcesses(editorBinary, projectPath); err == nil {
+		for _, p := range project {
+			port := mcpPortFromArgs(p.Args)
+			if port == 0 {
+				continue
+			}
+			pid := p.PID
+			log.Info("Asking untracked editor to quit over its bridge before full build", "pid", pid, "mcp_port", port)
+			gracefulQuit(port, pid, time.Time{}, func() bool { return !processAlive(pid) })
+		}
+	}
+
 	deadline := time.Now().Add(editorExitTimeout)
 	killAfter := time.Now().Add(editorExitGrace)
 	signalled := map[int]bool{}

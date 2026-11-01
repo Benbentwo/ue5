@@ -342,8 +342,12 @@ func (b *BuildOrchestrator) executeFullRebuild(ctx context.Context, record *Buil
 		}
 	}
 
-	// Step 2: Stop the tracked editor instance (waits for actual process
-	// exit, force-killing after 10s). Remember its editor MCP port so the
+	// Step 2: Stop the tracked editor instance. StopEditor first asks the
+	// editor to end PIE, close its asset editors and quit by itself over the
+	// SadTire MCP bridge (waiting, bounded, for a booting editor to become
+	// ready), and only then falls back to SIGTERM and a force-kill after 10s
+	// — see gracefulquit.go. It returns once the process has actually exited.
+	// Remember its editor MCP port so the
 	// restarted editor keeps it and connected sessions don't have to re-resolve.
 	var prevMCPPort int
 	for _, inst := range b.manager.ListInstances() {

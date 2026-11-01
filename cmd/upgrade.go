@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/Benbentwo/ue5/pkg"
 	"github.com/Benbentwo/ue5/pkg/server"
@@ -125,7 +124,7 @@ func runUpgrade(cmd *cobra.Command, args []string) {
 	// Restart it deliberately: stop old, start new from the installed path.
 	if daemonWasRunning {
 		fmt.Println("Restarting daemon on the new binary (managed editors will be stopped)...")
-		if err := server.StopDaemonAndWait(60 * time.Second); err != nil {
+		if err := server.StopDaemonAndWait(server.StopEditorTimeout); err != nil {
 			log.Warn("Old daemon did not stop; it keeps serving the previous version", "error", err)
 			fmt.Println("Run 'ue5 server stop' then 'ue5 server start' to move it to the new version.")
 			return

@@ -14,8 +14,11 @@ var (
 var serverKillCmd = &cobra.Command{
 	Use:   "kill",
 	Short: "Stop a managed editor instance",
-	Long: `Stops one or all managed editor instances. By default, sends SIGTERM
-for a graceful shutdown. Use --force to send SIGKILL immediately.`,
+	Long: `Stops one or all managed editor instances. By default the daemon asks the
+editor to quit by itself over its SadTire MCP bridge (end Play-In-Editor,
+close asset editors, QUIT_EDITOR), waiting for a booting editor to become
+ready first, and only falls back to SIGTERM then SIGKILL if that fails or
+times out. Use --force to send SIGKILL immediately.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		client := server.NewClient()
 
@@ -41,7 +44,7 @@ for a graceful shutdown. Use --force to send SIGKILL immediately.`,
 
 			for _, inst := range resp.Instances {
 				if inst.State == server.StateRunning || inst.State == server.StateStarting {
-					stopResp, err := client.Send(server.Request{
+					stopResp, err := client.WithTimeout(server.StopEditorTimeout).Send(server.Request{
 						ID:   "stop-editor",
 						Type: server.ReqStopEditor,
 						StopEditor: &server.StopEditorRequest{
@@ -66,7 +69,7 @@ for a graceful shutdown. Use --force to send SIGKILL immediately.`,
 		// Stop specific project - resolve from current directory
 		UpdateProjectPath()
 
-		resp, err := client.Send(server.Request{
+		resp, err := client.WithTimeout(server.StopEditorTimeout).Send(server.Request{
 			ID:   "stop-editor",
 			Type: server.ReqStopEditor,
 			StopEditor: &server.StopEditorRequest{
