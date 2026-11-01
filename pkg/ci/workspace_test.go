@@ -171,3 +171,56 @@ func TestWorkspaceSyncRecoversFromAStaleShallowRecord(t *testing.T) {
 		t.Fatalf("tags %q", tags)
 	}
 }
+
+// A stale shallow record inside a submodule (not the game repo) is healed too.
+func TestForgetSubmoduleHistoryClearsAStaleShallowSubmodule(t *testing.T) {
+	if exec.Command("git", "lfs", "version").Run() != nil {
+		t.Skip("git-lfs not installed")
+	}
+	// Local file:// submodules are refused by default since git 2.38.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+	t.Setenv("GIT_CONFIG_VALUE_0", "always")
+	subURL, _, _ := origin(t, "Tools")
+	gameURL, _, _ := origin(t, "Game")
+	gameDir := gameURL[len("file://"):]
+	gitT(t, gameDir, "submodule", "add", "-q", subURL, "tools")
+	gitT(t, gameDir, "commit", "-qm", "add tools")
+	sha := gitT(t, gameDir, "rev-parse", "HEAD")
+
+	w := Workspace{Root: t.TempDir()}
+	j := &Job{Request: Request{Game: "Game", Repo: gameURL, SHA: sha}}
+	var log bytes.Buffer
+	if err := w.Sync(context.Background(), j, &log); err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	sub := filepath.Join(w.GameDir("Game"), "tools")
+	if _, err := os.Stat(filepath.Join(sub, "f.txt")); err != nil {
+		t.Skipf("this sync does not check submodules out here: %v", err)
+	}
+	_ = os.WriteFile(filepath.Join(sub, "local.txt"), []byte("x"), 0o644)
+	gitT(t, sub, "add", "local.txt")
+	gitT(t, sub, "commit", "-qm", "local only")
+	stray := gitT(t, sub, "rev-parse", "HEAD")
+	shallow, err := w.shallowFile(context.Background(), sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shallow, []byte(stray+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log.Reset()
+	healed, err := w.forgetSubmoduleHistory(context.Background(), w.GameDir("Game"), &log)
+	if err != nil || !healed {
+		t.Fatalf("healed=%v err=%v\n%s", healed, err, log.String())
+	}
+	if _, err := os.Stat(shallow); !os.IsNotExist(err) {
+		t.Fatal("the submodule's shallow record must be gone")
+	}
+	if err := w.Sync(context.Background(), j, &log); err != nil {
+		t.Fatalf("sync after heal: %v\n%s", err, log.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(sub, "f.txt")); string(got) != "two" {
+		t.Fatalf("submodule file %q", got)
+	}
+}

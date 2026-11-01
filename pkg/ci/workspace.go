@@ -71,7 +71,9 @@ func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, su
 	if full {
 		shallow := filepath.Join(dir, ".git", "shallow")
 		fetchAll := func() error {
-			args := []string{"fetch", "--quiet", "--tags", "--force", "--prune"}
+			// Submodules are fetched by the submodule update below, which can heal them;
+			// a recursive fetch here fails the whole sync on one stale submodule.
+			args := []string{"fetch", "--quiet", "--recurse-submodules=no", "--tags", "--force", "--prune"}
 			if _, err := os.Stat(shallow); err == nil {
 				args = append(args, "--unshallow")
 			}
@@ -95,7 +97,7 @@ func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, su
 			}
 		}
 		if w.git(ctx, dir, io.Discard, "cat-file", "-e", sha+"^{commit}") != nil {
-			if err := git("fetch", "--quiet", "origin", sha); err != nil {
+			if err := git("fetch", "--quiet", "--recurse-submodules=no", "origin", sha); err != nil {
 				return err
 			}
 		}
@@ -121,8 +123,19 @@ func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, su
 		if err := git("submodule", "sync", "--recursive", "--quiet"); err != nil {
 			return err
 		}
-		if err := w.gitEnv(ctx, dir, log, []string{"GIT_LFS_SKIP_SMUDGE=1"}, "submodule", "update", "--init", "--force", "--recursive"); err != nil {
-			return err
+		update := func() error {
+			return w.gitEnv(ctx, dir, log, []string{"GIT_LFS_SKIP_SMUDGE=1"}, "submodule", "update", "--init", "--force", "--recursive")
+		}
+		if err := update(); err != nil {
+			// The same stale shallow record the game fetch heals above can sit in a
+			// submodule's own history. Forget it in every shallow submodule and retry once.
+			healed, herr := w.forgetSubmoduleHistory(ctx, dir, log)
+			if herr != nil || !healed {
+				return err
+			}
+			if err := update(); err != nil {
+				return err
+			}
 		}
 	}
 	head, err := w.output(ctx, dir, "rev-parse", "HEAD")
@@ -274,7 +287,11 @@ func (w Workspace) linkLFS(ctx context.Context, dir string, log io.Writer) (int,
 // fetch negotiates from nothing and receives complete history. Objects stay on
 // disk and the working tree is not touched.
 func (w *Workspace) forgetHistory(ctx context.Context, dir string, log io.Writer) error {
-	if err := os.Remove(filepath.Join(dir, ".git", "shallow")); err != nil && !os.IsNotExist(err) {
+	shallow, err := w.shallowFile(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(shallow); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	var refs bytes.Buffer
@@ -287,4 +304,54 @@ func (w *Workspace) forgetHistory(ctx context.Context, dir string, log io.Writer
 		}
 	}
 	return w.git(ctx, dir, log, "symbolic-ref", "HEAD", "refs/heads/ue5-ci-reset")
+}
+
+// shallowFile is the path of a checkout's shallow record, which for a submodule
+// lives in the parent's .git/modules rather than beside the working tree.
+func (w *Workspace) shallowFile(ctx context.Context, dir string) (string, error) {
+	p, err := w.output(ctx, dir, "rev-parse", "--git-path", "shallow")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(dir, p)
+	}
+	return p, nil
+}
+
+// forgetSubmoduleHistory runs forgetHistory in every initialised submodule that
+// has a shallow record. It reports whether it changed anything.
+func (w *Workspace) forgetSubmoduleHistory(ctx context.Context, dir string, log io.Writer) (bool, error) {
+	status, err := w.output(ctx, dir, "submodule", "status", "--recursive")
+	if err != nil {
+		return false, err
+	}
+	healed := false
+	for _, line := range strings.Split(status, "\n") {
+		fields := strings.Fields(strings.TrimLeft(line, " +-U"))
+		if len(fields) < 2 {
+			continue
+		}
+		sub := filepath.Join(dir, filepath.FromSlash(fields[1]))
+		shallow, err := w.shallowFile(ctx, sub)
+		if err != nil {
+			continue // not initialised yet; the update creates it
+		}
+		if _, err := os.Stat(shallow); err != nil {
+			continue
+		}
+		_, _ = fmt.Fprintf(log, "  submodule %s is shallow; dropping its local history and retrying\n", fields[1])
+		// submodule update needs a resolvable HEAD, so keep it detached where it was.
+		head, herr := w.output(ctx, sub, "rev-parse", "HEAD")
+		if err := w.forgetHistory(ctx, sub, log); err != nil {
+			return healed, err
+		}
+		if herr == nil {
+			if err := w.git(ctx, sub, log, "update-ref", "--no-deref", "HEAD", head); err != nil {
+				return healed, err
+			}
+		}
+		healed = true
+	}
+	return healed, nil
 }
