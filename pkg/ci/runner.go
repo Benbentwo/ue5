@@ -402,8 +402,10 @@ func (s *Service) pruneArtifacts(game string) {
 // UBT errors, UAT/script ERRORs, Python and test failures, git fatals.
 var errorLine = regexp.MustCompile(`(?i)(\berror\b[: ]|\berror [A-Z]{1,3}\d{3,5}\b|^\s*FAIL\b|FAILED \(|\bfatal:|Result: Failed|Traceback|[A-Za-z]+Error: |No space left on device|ERROR!)`)
 
-// noise is matched lines that are not failures.
-var noise = regexp.MustCompile(`(?i)(warning|0 error\(s\)|-error|errors? ?= ?0|LogInit|Display: .*error)`)
+// noise is matched lines that are not failures. "not a git repository" is a
+// probe the engine's build tool runs and ignores; a real sync failure is
+// reported on its own "ERROR: sync" line.
+var noise = regexp.MustCompile(`(?i)(warning|0 error\(s\)|-error|errors? ?= ?0|LogInit|Display: .*error|fatal: not a git repository)`)
 
 // ExtractErrors returns up to max distinct error lines from a log, earliest
 // first, since the first error is usually the cause and the rest fallout.
