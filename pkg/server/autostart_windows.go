@@ -5,6 +5,7 @@ package server
 import (
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 // createNoWindow is CREATE_NO_WINDOW: the daemon gets its own hidden console,
@@ -25,4 +26,10 @@ func setSysProcAttr(cmd *exec.Cmd) {
 // StopDaemonAndWait is the effective wait there.
 func processAlive(pid int) bool {
 	return false
+}
+
+// processArgsAndAge is not implemented on Windows; callers must pass the
+// bridge port explicitly there.
+func processArgsAndAge(pid int) (string, time.Duration) {
+	return "", 0
 }

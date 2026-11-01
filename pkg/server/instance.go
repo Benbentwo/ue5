@@ -20,6 +20,10 @@ const (
 	startupLogTimeout   = 30 * time.Second
 )
 
+// stopSignalGrace is how long StopEditor waits after SIGTERM before SIGKILL.
+// A var so tests can shrink it.
+var stopSignalGrace = 10 * time.Second
+
 // ProjectInstance is the runtime representation of a managed editor instance.
 type ProjectInstance struct {
 	Info    InstanceInfo
@@ -327,8 +331,13 @@ func (m *InstanceManager) StopEditor(projectPath string, force bool) (*InstanceI
 		if inst.cmd.Process != nil {
 			_ = inst.cmd.Process.Kill()
 		}
-	} else {
-		if inst.cmd.Process != nil {
+	} else if !gracefulQuit(inst.Info.MCPPort, inst.Info.PID, inst.Info.StartedAt, inst.exited) {
+		// The editor could not be asked to quit by itself (no bridge port,
+		// bridge never became ready, or it did not exit in time) — fall back
+		// to the signal ladder. See gracefulquit.go for why this is the
+		// fallback and not the first resort.
+		log.Warn("Graceful bridge quit did not stop the editor, sending SIGTERM", "project", inst.Info.ProjectName, "pid", inst.Info.PID)
+		if inst.cmd != nil && inst.cmd.Process != nil {
 			_ = inst.cmd.Process.Signal(syscall.SIGTERM)
 		}
 
@@ -336,14 +345,19 @@ func (m *InstanceManager) StopEditor(projectPath string, force bool) (*InstanceI
 		select {
 		case <-inst.done:
 			// Process exited
-		case <-time.After(10 * time.Second):
+		case <-time.After(stopSignalGrace):
 			log.Warn("Editor did not exit gracefully, force killing", "project", inst.Info.ProjectName)
-			if inst.cmd.Process != nil {
+			if inst.cmd != nil && inst.cmd.Process != nil {
 				_ = inst.cmd.Process.Kill()
 			}
 			// Wait for monitorProcess to finish
 			<-inst.done
 		}
+	}
+	if !force {
+		// done closes a moment before monitorProcess records the final
+		// state; wait for it so callers read stopped, not stopping.
+		waitForFinalState(inst)
 	}
 
 	// Return the final state (set by monitorProcess)
@@ -351,6 +365,33 @@ func (m *InstanceManager) StopEditor(projectPath string, force bool) (*InstanceI
 	info := inst.Info
 	inst.mu.Unlock()
 	return &info, nil
+}
+
+// exited reports whether the editor process has exited (monitorProcess
+// closed done).
+func (inst *ProjectInstance) exited() bool {
+	select {
+	case <-inst.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// waitForFinalState blocks briefly until monitorProcess has moved the
+// instance out of StateStopping. done is closed just before the state is
+// written, so without this a caller can read the stale stopping state.
+func waitForFinalState(inst *ProjectInstance) {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		inst.mu.Lock()
+		state := inst.Info.State
+		inst.mu.Unlock()
+		if state != StateStopping {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // ListInstances returns info for all tracked instances.
@@ -378,11 +419,20 @@ func (m *InstanceManager) StopAll() {
 	}
 	m.mu.RUnlock()
 
+	// In parallel: each stop first asks its editor to quit over the bridge
+	// (bounded, but far longer than a bare SIGTERM), and daemon shutdown
+	// should cost the slowest editor, not the sum of all of them.
+	var wg sync.WaitGroup
 	for _, path := range projects {
-		if _, err := m.StopEditor(path, false); err != nil {
-			log.Error("Failed to stop editor", "project", path, "error", err)
-		}
+		wg.Add(1)
+		go func(path string) {
+			defer wg.Done()
+			if _, err := m.StopEditor(path, false); err != nil {
+				log.Error("Failed to stop editor", "project", path, "error", err)
+			}
+		}(path)
 	}
+	wg.Wait()
 }
 
 // GetLogs queries logs for a given project.

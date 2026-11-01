@@ -24,6 +24,20 @@ func NewClient() *Client {
 	}
 }
 
+// StopEditorTimeout is the client-side wait for a stop_editor request. A
+// graceful stop asks the editor to end PIE, close its asset editors and quit
+// by itself before any signal is sent, and waits for a booting editor to
+// finish booting first; the worst case is the sum of gracefulTimings plus the
+// signal ladder, far past the default 10s.
+const StopEditorTimeout = 5 * time.Minute
+
+// WithTimeout returns a copy of the client using the given request timeout.
+func (c *Client) WithTimeout(d time.Duration) *Client {
+	cp := *c
+	cp.timeout = d
+	return &cp
+}
+
 // Send sends a request and returns the response.
 func (c *Client) Send(req Request) (*Response, error) {
 	conn, err := c.connect()
