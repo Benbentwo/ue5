@@ -47,6 +47,7 @@ func NewService(home string, cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	ensureToolPath()
 	pat := Secret(home, "azure-pat")
 	s := &Service{
 		Config:    cfg,
