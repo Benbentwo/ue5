@@ -80,3 +80,11 @@ func TestWriteInstanceRegistryNilIsEmptyArray(t *testing.T) {
 		t.Errorf("expected empty instances array, got %v", reg.Instances)
 	}
 }
+
+func TestResolveUprojectPathRejectsRelative(t *testing.T) {
+	for _, p := range []string{".", "./Game.uproject", "Game"} {
+		if _, err := resolveUprojectPath(p); err == nil {
+			t.Fatalf("%q: expected relative path to be rejected", p)
+		}
+	}
+}

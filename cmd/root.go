@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"github.com/Benbentwo/ue5/pkg"
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
@@ -78,33 +79,45 @@ func UpdateProjectPath() {
 		}
 	}
 
-	info, err := os.Stat(dir)
-	// TODO add `.uplugin` support
-	if strings.HasSuffix(dir, ".uproject") {
-		// If the path ends with .uproject, treat it as a project file
-		log.Debug("Project path is a .uproject file", "path", dir)
-		ResolvedUProject = dir
-	} else if err != nil || !info.IsDir() {
-		// If the path is not a directory or does not exist, log an error
-		// e.g. if someone passes myproject.txt or a non-existent directory
-		log.Fatal("invalid project directory", "dir", dir, "info", info, "error", err)
-	} else {
-		// else (if the path is a directory)
-		// Search for *.uproject
-		matches, err := filepath.Glob(filepath.Join(dir, "*.uproject"))
-		if err != nil || len(matches) == 0 {
-			log.Print("Please run from project directory or specify a project with --project <path>")
-			log.Fatal("no .uproject file found in the directory", "dir", dir)
-		}
-		ResolvedUProject = matches[0]
-
+	resolved, err := resolveProjectFile(dir)
+	if err != nil {
+		log.Print("Please run from project directory or specify a project with --project <path>")
+		log.Fatal("could not resolve project", "dir", dir, "error", err)
 	}
+	ResolvedUProject = resolved
 	log.Debug("✅ Determined project", "uproject", ResolvedUProject)
 	FileName := filepath.Base(ResolvedUProject)
 	ProjectName = strings.TrimSuffix(FileName, filepath.Ext(FileName))
 
 	UProject = pkg.NewUproject(ResolvedUProject)
 	log.Debug("Loaded UProject", "Name", ProjectName, "EngineVersion", UProject.EngineAssociation)
+}
+
+// resolveProjectFile turns a --project value (a .uproject file or a directory
+// holding one) into an absolute .uproject path. The path must be absolute
+// because server commands send it to the daemon, which runs from a different
+// working directory and would otherwise resolve "." against its own folder.
+func resolveProjectFile(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("invalid project path %q: %w", dir, err)
+	}
+	// TODO add `.uplugin` support
+	if strings.HasSuffix(abs, ".uproject") {
+		return abs, nil
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("invalid project directory %s: %w", abs, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("not a directory or .uproject file: %s", abs)
+	}
+	matches, err := filepath.Glob(filepath.Join(abs, "*.uproject"))
+	if err != nil || len(matches) == 0 {
+		return "", fmt.Errorf("no .uproject file found in %s", abs)
+	}
+	return matches[0], nil
 }
 
 func UpdateEnginePath() {
