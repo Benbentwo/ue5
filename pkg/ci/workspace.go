@@ -1,6 +1,7 @@
 package ci
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -68,13 +69,30 @@ func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, su
 		return err
 	}
 	if full {
-		args := []string{"fetch", "--quiet", "--tags", "--force", "--prune"}
-		if _, err := os.Stat(filepath.Join(dir, ".git", "shallow")); err == nil {
-			args = append(args, "--unshallow")
+		shallow := filepath.Join(dir, ".git", "shallow")
+		fetchAll := func() error {
+			args := []string{"fetch", "--quiet", "--tags", "--force", "--prune"}
+			if _, err := os.Stat(shallow); err == nil {
+				args = append(args, "--unshallow")
+			}
+			args = append(args, "origin", "+refs/heads/*:refs/remotes/origin/*")
+			return git(args...)
 		}
-		args = append(args, "origin", "+refs/heads/*:refs/remotes/origin/*")
-		if err := git(args...); err != nil {
-			return err
+		if err := fetchAll(); err != nil {
+			if _, serr := os.Stat(shallow); serr != nil {
+				return err
+			}
+			// A shallow checkout made by another tool can record a boundary commit the
+			// server no longer has (a deleted merge commit, say), and every deepening
+			// fetch then fails. Forget the local history and fetch it whole: objects
+			// already on disk stay, and the working tree is reset by the checkout below.
+			_, _ = fmt.Fprintln(log, "  fetch failed in a shallow checkout; dropping its local history and fetching the history whole")
+			if rerr := w.forgetHistory(ctx, dir, log); rerr != nil {
+				return fmt.Errorf("%w (and resetting the shallow history failed: %v)", err, rerr)
+			}
+			if err := fetchAll(); err != nil {
+				return err
+			}
 		}
 		if w.git(ctx, dir, io.Discard, "cat-file", "-e", sha+"^{commit}") != nil {
 			if err := git("fetch", "--quiet", "origin", sha); err != nil {
@@ -250,4 +268,23 @@ func (w Workspace) linkLFS(ctx context.Context, dir string, log io.Writer) (int,
 		fallback = fallback[n:]
 	}
 	return copied, nil
+}
+
+// forgetHistory removes a checkout's shallow record and every ref, so the next
+// fetch negotiates from nothing and receives complete history. Objects stay on
+// disk and the working tree is not touched.
+func (w *Workspace) forgetHistory(ctx context.Context, dir string, log io.Writer) error {
+	if err := os.Remove(filepath.Join(dir, ".git", "shallow")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	var refs bytes.Buffer
+	if err := w.git(ctx, dir, &refs, "for-each-ref", "--format=%(refname)"); err != nil {
+		return err
+	}
+	for _, ref := range strings.Fields(refs.String()) {
+		if err := w.git(ctx, dir, log, "update-ref", "-d", ref); err != nil {
+			return err
+		}
+	}
+	return w.git(ctx, dir, log, "symbolic-ref", "HEAD", "refs/heads/ue5-ci-reset")
 }

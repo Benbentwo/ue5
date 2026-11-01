@@ -124,3 +124,50 @@ func TestWorkspaceSyncFillsLFSFiles(t *testing.T) {
 	}
 	t.Log(strings.TrimSpace(log.String()[strings.Index(log.String(), "lfs: "):]))
 }
+
+// A shallow checkout whose shallow record names a commit the server never had
+// (as when another tool's checkout fetched a merge commit that was later
+// deleted) must not wedge the sync: it forgets the history and fetches it whole.
+func TestWorkspaceSyncRecoversFromAStaleShallowRecord(t *testing.T) {
+	if exec.Command("git", "lfs", "version").Run() != nil {
+		t.Skip("git-lfs not installed")
+	}
+	gameURL, _, gameNew := origin(t, "Game")
+	w := Workspace{Root: t.TempDir()}
+	j := &Job{Request: Request{Game: "Game", Repo: gameURL, SHA: gameNew}}
+	var log bytes.Buffer
+	if err := w.Sync(context.Background(), j, &log); err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	dir := w.GameDir("Game")
+	// A commit that exists only here, recorded as a shallow boundary.
+	_ = os.WriteFile(filepath.Join(dir, "local.txt"), []byte("x"), 0o644)
+	gitT(t, dir, "add", "local.txt")
+	gitT(t, dir, "commit", "-qm", "local only")
+	stray := gitT(t, dir, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(dir, ".git", "shallow"), []byte(stray+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Some servers reject a fetch that names an unknown shallow boundary (the sync
+	// then calls forgetHistory); git's own file:// server tolerates it, so drive
+	// the recovery step directly and prove a sync from that state is whole.
+	log.Reset()
+	if err := w.forgetHistory(context.Background(), dir, &log); err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	if refs := gitT(t, dir, "for-each-ref"); refs != "" {
+		t.Fatalf("refs left behind: %s", refs)
+	}
+	if err := w.Sync(context.Background(), j, &log); err != nil {
+		t.Fatalf("sync after reset: %v\n%s", err, log.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "f.txt")); string(got) != "two" {
+		t.Fatalf("game file %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "shallow")); !os.IsNotExist(err) {
+		t.Fatalf("the checkout must no longer be shallow\n%s", log.String())
+	}
+	if tags := gitT(t, dir, "tag"); !strings.Contains(tags, "v0.1.0") {
+		t.Fatalf("tags %q", tags)
+	}
+}
