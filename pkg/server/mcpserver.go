@@ -771,7 +771,14 @@ func (w *mcpServerWrapper) handleListInstances(ctx context.Context, req mcp.Call
 // resolveUprojectPath accepts either a .uproject path or a directory and
 // returns the absolute .uproject path. Mirrors UpdateProjectPath() in
 // cmd/root.go: walks up from the given path until it finds a .uproject file.
+//
+// Relative paths are rejected: the daemon's working directory is unrelated to
+// the caller's, so "." would silently point at whatever folder the daemon was
+// started from.
 func resolveUprojectPath(rawPath string) (string, error) {
+	if !filepath.IsAbs(rawPath) {
+		return "", fmt.Errorf("project path must be absolute, got %q", rawPath)
+	}
 	abs, err := filepath.Abs(rawPath)
 	if err != nil {
 		return "", fmt.Errorf("invalid path %q: %w", rawPath, err)

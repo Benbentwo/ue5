@@ -301,7 +301,17 @@ func (d *Daemon) handleStartEditor(conn net.Conn, req Request) {
 		return
 	}
 
-	info, err := d.manager.StartEditor(req.StartEditor)
+	// Key instances by the canonical .uproject path so the same project can't
+	// get a second editor just because it was named differently.
+	projectPath, err := resolveUprojectPath(req.StartEditor.ProjectPath)
+	if err != nil {
+		d.sendError(conn, req.ID, err.Error())
+		return
+	}
+	startReq := *req.StartEditor
+	startReq.ProjectPath = projectPath
+
+	info, err := d.manager.StartEditor(&startReq)
 	if err != nil {
 		d.sendError(conn, req.ID, err.Error())
 		return
