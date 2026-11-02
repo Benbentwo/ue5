@@ -21,6 +21,7 @@ type Workspace struct {
 	Root       string
 	PluginsDir string // relative to Root; default Shared/Plugins
 	PAT        string // Azure PAT for fetches; empty uses whatever git credentials the user has
+	LFSPrune   bool   // after a sync, drop local LFS objects the checked-out commit does not use
 }
 
 // GameDir is where a game is checked out.
@@ -153,7 +154,27 @@ func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, su
 			_, _ = fmt.Fprintf(log, "  warning: git lfs dedup failed in %s (the checkout is still correct): %v\n", dir, err)
 		}
 	}
+	if w.LFSPrune {
+		w.pruneLFS(ctx, dir, log)
+	}
 	return nil
+}
+
+// pruneLFS deletes local LFS objects that the checked-out commit does not
+// reference. The recent-refs and recent-commits windows are set to zero so
+// only HEAD counts, and the prune offset to zero so nothing is kept "just in
+// case". Objects not yet pushed are still kept (git lfs prune's own rule). It
+// frees space only, so a failure is a warning and never fails the sync.
+func (w Workspace) pruneLFS(ctx context.Context, dir string, log io.Writer) {
+	err := w.git(ctx, dir, log,
+		"-c", "lfs.fetchrecentrefsdays=0",
+		"-c", "lfs.fetchrecentcommitsdays=0",
+		"-c", "lfs.fetchrecentremoterefs=false",
+		"-c", "lfs.pruneoffsetdays=0",
+		"lfs", "prune")
+	if err != nil {
+		_, _ = fmt.Fprintf(log, "  warning: git lfs prune failed in %s (the checkout is still correct): %v\n", dir, err)
+	}
 }
 
 func (w Workspace) git(ctx context.Context, dir string, log io.Writer, args ...string) error {

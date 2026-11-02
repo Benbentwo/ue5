@@ -36,6 +36,10 @@ type Config struct {
 	// DiskFloorGB holds the queue (rather than failing every job) while free
 	// space on WorkRoot is below this.
 	DiskFloorGB int `json:"disk_floor_gb"`
+	// LFSPrune deletes local Git LFS objects the checked-out commit does not use,
+	// after every successful sync. Without it each checkout keeps every version
+	// of every large file it has ever fetched. Unset means on.
+	LFSPrune *bool `json:"lfs_prune,omitempty"`
 	// ReclaimCommand runs once when the disk is below the floor, before holding.
 	ReclaimCommand []string `json:"reclaim_command,omitempty"`
 	// PublicURL is how other machines reach this dashboard; it goes into the
@@ -74,6 +78,9 @@ func LoadConfig(home string) (Config, error) {
 	c.fill()
 	return c, nil
 }
+
+// PruneLFS reports whether syncs prune unused LFS objects (default true).
+func (c *Config) PruneLFS() bool { return c.LFSPrune == nil || *c.LFSPrune }
 
 func (c *Config) fill() {
 	host := localHostName()
