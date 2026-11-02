@@ -46,6 +46,7 @@ developer laptop running the daemon for editor management never takes builds.
 | `artifact_root` | `<work_root>/_artifacts` | Each job's package goes to `<artifact_root>/<Game>/<job id>/`. |
 | `keep_artifacts` | `3` | Packaged builds kept per game. |
 | `disk_floor_gb` | `50` | Below this the queue **holds** (it does not fail every job). |
+| `lfs_prune` | `true` | After every successful sync, `git lfs prune` drops local LFS objects the checked-out commit does not use, so a checkout does not keep every version of every large file. Set `false` to keep them. |
 | `need_gb` | none | Free GB a job needs before it starts, by `"<Game>/<kind>"` or `"<Game>"`, e.g. `{"MyGame/release": 150}`. A dispatch's own `--need-gb` wins; the largest of the floor and these applies. |
 | `reclaim_command` | none | Run once an hour while below the floor, e.g. `["/bin/bash", "/Users/me/reclaim.sh"]`. |
 | `public_url` | `http://<LocalHostName>.local:9516` | Used in commit-status links. Set it (e.g. to the box's IP) if `.local` names do not resolve on your network. |

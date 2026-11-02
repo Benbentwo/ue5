@@ -52,7 +52,7 @@ func NewService(home string, cfg Config) (*Service, error) {
 	s := &Service{
 		Config:    cfg,
 		Queue:     q,
-		Workspace: Workspace{Root: cfg.WorkRoot, PluginsDir: cfg.PluginsDir, PAT: pat},
+		Workspace: Workspace{Root: cfg.WorkRoot, PluginsDir: cfg.PluginsDir, PAT: pat, LFSPrune: cfg.PruneLFS()},
 		Home:      home,
 		Logf:      func(string, ...any) {},
 	}
