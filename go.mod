@@ -1,13 +1,13 @@
 module github.com/Benbentwo/ue5
 
-go 1.24.2
+go 1.26.0
 
 require (
 	github.com/charmbracelet/log v0.4.2
 	github.com/danieljoos/wincred v1.2.2
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/spf13/cobra v1.9.1
-	golang.org/x/sys v0.33.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
