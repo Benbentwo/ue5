@@ -66,8 +66,11 @@ func (w Workspace) syncRepo(ctx context.Context, dir, repo, sha string, full, su
 		if err := git("remote", "add", "origin", cleanRepoURL(repo)); err != nil {
 			return err
 		}
-	} else if err := git("remote", "set-url", "origin", cleanRepoURL(repo)); err != nil {
-		return err
+	} else {
+		clearStaleGitLocks(dir, log)
+		if err := git("remote", "set-url", "origin", cleanRepoURL(repo)); err != nil {
+			return err
+		}
 	}
 	if full {
 		shallow := filepath.Join(dir, ".git", "shallow")
@@ -375,4 +378,50 @@ func (w *Workspace) forgetSubmoduleHistory(ctx context.Context, dir string, log 
 		healed = true
 	}
 	return healed, nil
+}
+
+// clearStaleGitLocks removes lock files a killed git left in a checkout: a job
+// cancelled or a daemon stopped mid-checkout leaves .git/index.lock behind, and
+// every later sync then fails with "Unable to create ... index.lock: File exists".
+// A sync runs under the workspace lock, so no cooperating writer is in this
+// checkout now and any git lock still on disk has no owner. Covers the repo's
+// own git dir and each submodule's (under .git/modules).
+func clearStaleGitLocks(dir string, log io.Writer) {
+	root := filepath.Join(dir, ".git")
+	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+		return
+	}
+	gitDirs := []string{root}
+	_ = filepath.WalkDir(filepath.Join(root, "modules"), func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		if _, herr := os.Stat(filepath.Join(path, "HEAD")); herr == nil {
+			gitDirs = append(gitDirs, path)
+		}
+		if d.Name() == "objects" || d.Name() == "lfs" {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	remove := func(path string) {
+		if err := os.Remove(path); err == nil {
+			_, _ = fmt.Fprintf(log, "  removed a stale git lock left by an interrupted git: %s\n", path)
+		}
+	}
+	for _, gd := range gitDirs {
+		if entries, err := os.ReadDir(gd); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".lock") {
+					remove(filepath.Join(gd, e.Name()))
+				}
+			}
+		}
+		_ = filepath.WalkDir(filepath.Join(gd, "refs"), func(path string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(d.Name(), ".lock") {
+				remove(path)
+			}
+			return nil
+		})
+	}
 }

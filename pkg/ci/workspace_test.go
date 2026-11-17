@@ -268,3 +268,53 @@ func TestWorkspaceSyncPrunesLFSObjectsTheCommitDoesNotUse(t *testing.T) {
 		t.Fatalf("big.bin is not the v2 content (%d bytes)", len(got))
 	}
 }
+
+// A git killed mid-checkout (a cancelled job, a stopped daemon) leaves lock
+// files behind. The next sync must clear them instead of failing on them.
+func TestWorkspaceSyncClearsLocksLeftByAnInterruptedGit(t *testing.T) {
+	if exec.Command("git", "lfs", "version").Run() != nil {
+		t.Skip("git-lfs not installed")
+	}
+	gameURL, gameOld, gameNew := origin(t, "Game")
+	w := Workspace{Root: t.TempDir()}
+	j := &Job{Request: Request{Game: "Game", Repo: gameURL, SHA: gameNew}}
+	var log bytes.Buffer
+	if err := w.Sync(context.Background(), j, &log); err != nil {
+		t.Fatalf("%v\n%s", err, log.String())
+	}
+	gitDir := filepath.Join(w.GameDir("Game"), ".git")
+	locks := []string{
+		filepath.Join(gitDir, "index.lock"),
+		filepath.Join(gitDir, "HEAD.lock"),
+		filepath.Join(gitDir, "refs", "remotes", "origin", "main.lock"),
+		filepath.Join(gitDir, "modules", "sub", "index.lock"),
+	}
+	_ = os.MkdirAll(filepath.Join(gitDir, "modules", "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(gitDir, "modules", "sub", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(gitDir, "refs", "remotes", "origin"), 0o755)
+	for _, l := range locks {
+		if err := os.WriteFile(l, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Control: with the lock in place git itself refuses, so the sync below proves the clearing.
+	if out, err := exec.Command("git", "-C", w.GameDir("Game"), "checkout", "--force", "--detach", "--quiet", gameOld).CombinedOutput(); err == nil || !strings.Contains(string(out), "index.lock") {
+		t.Fatalf("control: git should refuse to check out over index.lock, got err=%v out=%s", err, out)
+	}
+	log.Reset()
+	j.SHA = gameOld
+	if err := w.Sync(context.Background(), j, &log); err != nil {
+		t.Fatalf("sync over stale locks: %v\n%s", err, log.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(w.GameDir("Game"), "f.txt")); string(got) != "one" {
+		t.Fatalf("after the sync %q", got)
+	}
+	for _, l := range locks {
+		if _, err := os.Stat(l); !os.IsNotExist(err) {
+			t.Fatalf("%s is still there", l)
+		}
+	}
+	if n := strings.Count(log.String(), "removed a stale git lock"); n != len(locks) {
+		t.Fatalf("the log should name each of the %d locks removed, named %d:\n%s", len(locks), n, log.String())
+	}
+}

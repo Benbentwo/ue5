@@ -141,6 +141,13 @@ While a box moves over, CI agent jobs may still build the old way in the same
 `<work_root>/.workspace-lock/` for each job and **waits** (the job shows
 "waiting for the workspace: in use by …") while anything else holds it. A
 holder is a process id; a lock whose process has exited is stale and taken over.
+
+A git that is killed mid-checkout (a cancelled build, a stopped daemon) leaves
+lock files such as `.git/index.lock` in the checkout. Every sync removes any git
+lock it finds in a checkout before it starts, in the repo's own git dir and in
+each submodule's, and says so in the build log. This is safe because the sync
+holds the workspace lock: do not run git by hand in a work-root checkout without
+taking that lock.
 To take part from a shell step, take the lock before touching the checkouts and
 name a process that lives as long as your work (for an Azure job, the
 `Agent.Worker` process), so the lock frees itself when the job ends:
