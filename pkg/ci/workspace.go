@@ -186,11 +186,15 @@ func (w Workspace) git(ctx context.Context, dir string, log io.Writer, args ...s
 
 func (w Workspace) gitEnv(ctx context.Context, dir string, log io.Writer, env []string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", w.prefix(args)...)
+	detach(cmd)
 	cmd.Dir = dir
 	cmd.Stdout = log
 	cmd.Stderr = log
 	cmd.Env = append(append(os.Environ(), noPrompt...), env...)
 	if err := cmd.Run(); err != nil {
+		if childStartFailure(err) {
+			return fmt.Errorf("git %s: %w (%s)", args[0], err, childStartHint)
+		}
 		return fmt.Errorf("git %s: %w", args[0], err)
 	}
 	return nil
@@ -202,6 +206,7 @@ var noPrompt = []string{"GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never", "GIT_A
 
 func (w Workspace) output(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", w.prefix(args)...)
+	detach(cmd)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), noPrompt...)
 	out, err := cmd.Output()
@@ -253,6 +258,7 @@ func authFailure(log string) bool {
 // checkout: `ue5 ci doctor` uses it to prove the credentials.
 func (w Workspace) LsRemote(ctx context.Context, repo string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", w.prefix([]string{"ls-remote", cleanRepoURL(repo), "HEAD"})...)
+	detach(cmd)
 	cmd.Env = append(os.Environ(), noPrompt...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
