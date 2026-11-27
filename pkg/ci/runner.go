@@ -194,6 +194,7 @@ func (s *Service) diskHold(j *Job) (hold, never string) {
 		s.reclaimed = time.Now()
 		s.Logf("ci: %d GB free on %s, %s needs %d GB; running reclaim", gb, root, j.ID, need)
 		cmd := exec.Command(s.Config.ReclaimCommand[0], s.Config.ReclaimCommand[1:]...)
+		detach(cmd)
 		_ = cmd.Run()
 		if gb2, err := free(root); err == nil && gb2 >= need {
 			return "", ""
@@ -282,6 +283,14 @@ func (s *Service) execute(ctx context.Context, j *Job, log *os.File, artifacts s
 	syncFn := s.syncFn
 	if syncFn == nil {
 		syncFn = s.Workspace.Sync
+		// A service that cannot start a console program fails every step of the
+		// job; say so plainly before the sync turns it into a bare exit status.
+		if err := checkChildStart(ctx); err != nil {
+			msg := err.Error()
+			s.Logf("ci: %s: %s", j.ID, msg)
+			_, _ = fmt.Fprintf(log, "ERROR: %s\n", msg)
+			return StateFailed, nil, msg
+		}
 	}
 	if err := syncFn(ctx, j, log); err != nil {
 		msg := err.Error()
